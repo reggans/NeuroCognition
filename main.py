@@ -146,4 +146,4 @@ if __name__ == "__main__":
         json.dump(run_stats, f)
     
     with open("run_history.json", "w") as f:
-        json.dump(model.get_history(), f)
+        json.dump(model.history, f)

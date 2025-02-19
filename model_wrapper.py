@@ -31,18 +31,25 @@ class ModelWrapper():
                                                                     device_map="auto")
             self.tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
         
-        self.chat = None
+        self.chat = None # Specific to Gemini API, None otherwise
         self.history = None
         self.model_name = model_name
     
     def init_chat(self, task_prompt):
         if self.model_name == "gemini":
+            # Start Gemini chat
             self.chat = self.model.start_chat(
                 history = [
                     {"role": "user", "parts": task_prompt},
-                    {"role": "model", "parts": "Understood, lets start the test."},
+                    {"role": "model", "parts": "Understood, lets start."},
                 ]
             )
+
+            # Initialize history
+            self.history = [
+                {"role": "user", "content": task_prompt},
+                {"role": "model", "content": "Understood, lets start."},
+            ]
         else:
             self.history = [
                 {"role": "system", "content": task_prompt},
@@ -51,6 +58,12 @@ class ModelWrapper():
     def send_message(self, message, max_new_tokens=512):
         if self.model_name == "gemini":
             response = self.chat.send_message(message).text
+
+            # Add to history
+            self.history.extend([
+                {"role": "user", "content": message},
+                {"role": "model", "content": response}
+            ])
         else:
             self.history.append(
                 {"role": "user", "content": message}
@@ -74,8 +87,3 @@ class ModelWrapper():
             self.history.append({"role": "model", "content": response})
             
         return response
-    
-    def get_history(self):
-        if self.model_name == "gemini":
-            return dict(self.chat.history)
-        return self.history
