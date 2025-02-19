@@ -142,3 +142,8 @@ if __name__ == "__main__":
     for key, value in run_stats.items():
         print(f"{key}: {value}")
     
+    with open("run_stats.json", "w") as f:
+        json.dump(run_stats, f)
+    
+    with open("run_history.json", "w") as f:
+        json.dump(model.get_history(), f)
