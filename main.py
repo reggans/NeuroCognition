@@ -10,6 +10,20 @@ import random, json, re, argparse, os
 from model_wrapper import ModelWrapper
 
 def run_swm(model, n_boxes, cot=None):
+    # Initiate w/ task prompt
+    task_prompt = f"""You will be performing the Spatial Working Memory (SWM) test.
+{n_boxes} boxes will be presented to you, one of which contains a token.
+Your goal is to find {n_boxes} tokens by repeatedly selecting a box to open.
+If the box contains a token, I will respond with "TOKEN".
+If the box is empty, I will respond with "EMPTY".
+Once the token is found, the token will be regenerated in another box.
+The token will be generated in a box that has never contained a token before in the trial.
+The token may be generated in a box that has been opened and found empty before, as long as it never contained the token previously.
+Your final answer should be a number from 1-{n_boxes}, the index of the box you selected.
+"""
+    model.init_chat(task_prompt)
+
+    # Configure the question presented each turn and CoT prompt
     if cot is not None:
         if cot == "implicit":
             cot_prompt = "Think step-by-step, utilizing information from previous feedbacks, and state your reasoning clearly.\n"
@@ -21,13 +35,14 @@ def run_swm(model, n_boxes, cot=None):
     else:
         question = f"Which of the {n_boxes} boxes would you like to open?\nState your final answer by wrapping it with <ANS> and </ANS>"
 
+    # Initialize run statistics & variables
     legal_boxes = [x for x in range(1, n_boxes+1)]
     worst_case_n = sum(legal_boxes)
     n_guesses = []
     illegal_guesses = []
     invalid_guesses = []
 
-
+    # Start the test
     response = model.send_message(question)
     with tqdm(total=3*worst_case_n, desc="Total guesses") as pbar:
         for i in tqdm(range(n_boxes), total=n_boxes, desc="Rounds"):
