@@ -5,21 +5,25 @@ from huggingface_hub import login
 import os
 
 class ModelWrapper():
-    def __init__(self, model_name):
+    def __init__(self, model_name, api_key=None):
         # Gemini API
         if model_name == "gemini":
-            api_key = os.getenv("GOOGLE_API_KEY")
             if api_key is None:
-                raise ValueError("Please set the GOOGLE_API_KEY environment variable.")
+                if os.getenv("GOOGLE_API_KEY") is not None:
+                    api_key = os.getenv("GOOGLE_API_KEY")
+                else:
+                    raise ValueError("Please set the GOOGLE_API_KEY environment variable or pass it to the CLI.")
             genai.configure(api_key=api_key)
 
             self.model = genai.GenerativeModel()
             self.tokenizer = None
         # Get model from Hugging Face
         else:
-            api_key = os.getenv("HF_TOKEN")
             if api_key is None:
-                raise ValueError("Please set the HF_TOKEN environment variable.")
+                if os.getenv("HF_TOKEN") is not None:
+                    api_key = os.getenv("HF_TOKEN")
+                else:
+                    raise ValueError("Please set the HF_TOKEN environment variable or pass it to the CLI.")
             login(token=api_key)
 
             self.model = transformers.AutoModelForCausalLM.from_pretrained(model_name,
@@ -57,7 +61,7 @@ class ModelWrapper():
                 tokenize=False,
                 add_generation_prompt=True,
             )
-            
+
             model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
             generated_ids = self.model.generate(
                 **model_inputs,

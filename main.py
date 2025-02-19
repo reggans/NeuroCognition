@@ -114,13 +114,17 @@ if __name__ == "__main__":
     parser.add_argument("--n_boxes", type=int, default=6, help="The number of boxes in the test. More == harder.")
     parser.add_argument("--cot", type=str, default=None, help="The type of CoT to use.")
     parser.add_argument("--seed", type=int, default=42, help="The random seed.")
+    parser.add_argument("--api_key", type=str, default=None, help="API key to use. If none, uses key stored in environment variable.")
     args = parser.parse_args()
     
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    model = ModelWrapper(args.model)
+    model = ModelWrapper(args.model, api_key=args.api_key)
     
-    run
+    run_stats = run_swm(model, args.n_boxes, args.cot)
+
+    for key, value in run_stats.items():
+        print(f"{key}: {value}")
     
