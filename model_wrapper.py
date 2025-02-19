@@ -1,4 +1,4 @@
-import genai
+import google.generativeai as genai
 import transformers
 from huggingface_hub import login
 
