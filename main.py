@@ -28,6 +28,7 @@ def run_swm(model, n_boxes, cot=None):
     illegal_guesses = []
     invalid_guesses = []
 
+
     response = model.send_message(question)
     with tqdm(total=3*worst_case_n, desc="Total guesses") as pbar:
         for i in tqdm(range(n_boxes), total=n_boxes, desc="Rounds"):
@@ -66,7 +67,7 @@ def run_swm(model, n_boxes, cot=None):
             while not found:
                 n_guesses[-1] += 1
                 pbar.update(1)
-                
+
                 if re.search(r"<ANS>(?s:.*)</ANS>", response) is not None:
                     chosen_box = re.search(r"<ANS>(?s:.*)</ANS>", response)[0]
                     chosen_box = re.sub(r"<ANS>|</ANS>", "", chosen_box).strip()
