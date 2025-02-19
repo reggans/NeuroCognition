@@ -56,7 +56,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                 # Ensure no lucky first guess
                 if re.search(r"<ANS>(?s:.*)</ANS>", response) is not None:
                     chosen_box = re.search(r"<ANS>(?s:.*)</ANS>", response)[0]
-                    chosen_box = re.sub(r"<ANS>|</ANS>", chosen_box).strip()
+                    chosen_box = re.sub(r"<ANS>|</ANS>", "", chosen_box).strip()
                     try:
                         chosen_box = int(chosen_box)
                     except ValueError:
