@@ -77,5 +77,5 @@ class ModelWrapper():
     
     def get_history(self):
         if self.model_name == "gemini":
-            return self.chat.history
+            return dict(self.chat.history)
         return self.history
