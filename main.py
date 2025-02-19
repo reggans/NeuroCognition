@@ -10,14 +10,13 @@ import random, json, re, argparse, os
 from model_wrapper import ModelWrapper
 
 def run_swm(model, n_boxes, cot=None):
-    if cot == "implicit":
-        cot_prompt = "Think step-by-step, utilizing information from previous feedbacks, and state your reasoning clearly.\n"
-    elif cot == "explicit":
-        cot_prompt = cot_prompt + "Track the boxes where the tokens have been found before.\n"""
-    else:
-        raise ValueError("CoT must be None, or either of 'implicit' or 'explicit'.")
-    
     if cot is not None:
+        if cot == "implicit":
+            cot_prompt = "Think step-by-step, utilizing information from previous feedbacks, and state your reasoning clearly.\n"
+        elif cot == "explicit":
+            cot_prompt = cot_prompt + "Track the boxes where the tokens have been found before.\n"""
+        else:
+            raise ValueError("CoT must be None, or either of 'implicit' or 'explicit'.")
         question = f"{cot_prompt}Which of the {n_boxes} boxes would you like to open?\nState your final answer by wrapping it with <ANS> and </ANS>"
     else:
         question = f"Which of the {n_boxes} boxes would you like to open?\nState your final answer by wrapping it with <ANS> and </ANS>"
