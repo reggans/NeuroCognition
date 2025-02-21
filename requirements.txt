@@ -1,0 +1,6 @@
+huggingface_hub==0.29.1
+numpy==1.25.2
+protobuf==5.29.3
+torch==2.1.2+cu118
+tqdm==4.66.1
+transformers==4.49.0
