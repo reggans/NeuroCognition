@@ -32,12 +32,12 @@ RUN conda update conda \
 # install pytorch inside conda environment
 RUN conda init
 SHELL ["bash", "-lc"]
-RUN conda activate ingram && pip3 install torch torchvision torchaudio -f https://download.pytorch.org/whl/cu121/torch_stable.html
+RUN conda activate swm && pip3 install torch torchvision torchaudio -f https://download.pytorch.org/whl/cu121/torch_stable.html
 
 # setup conda environment variable
-RUN echo "conda activate ingram" >> ~/.bashrc
-ENV PATH /opt/conda/envs/ingram/bin:$PATH
-ENV CONDA_DEFAULT_ENV $ingram
+RUN echo "conda activate swm" >> ~/.bashrc
+ENV PATH /opt/conda/envs/swm/bin:$PATH
+ENV CONDA_DEFAULT_ENV $swm
 
 # Set the working directory
 WORKDIR /app
