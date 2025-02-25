@@ -76,7 +76,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
             if chosen_box is None:
                 token_box = random.choice(legal_boxes)
                 legal_boxes.remove(token_box)
-            
+                            
             tqdm.write(f"Round {i+1}")
             tqdm.write(f"Answer: Box {token_box}")
             tqdm.write(f"Legal boxes: {legal_boxes}")
