@@ -40,3 +40,6 @@ ENV CONDA_DEFAULT_ENV=$swm
 
 # Set the working directory
 WORKDIR /app
+
+# Clone the repo
+RUN git clone https://github.com/reggans/SWM
