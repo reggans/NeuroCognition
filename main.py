@@ -60,10 +60,9 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
             illegal_guesses.append(0)
             invalid_guesses.append(0)
 
-            token_box = None
             # TODO - If answer is invalid, wait for a valid first answer before re-choosing token box
-            if len(legal_boxes) > 1:
-                # Ensure no lucky first guess
+            # Ensure no lucky first guess
+            if len(legal_boxes) > 1: 
                 if re.search(r"<ANS>(?s:.*)</ANS>", response) is not None:
                     chosen_box = re.search(r"<ANS>(?s:.*)</ANS>", response)[0]
                     chosen_box = re.sub(r"<ANS>|</ANS>", "", chosen_box).strip()
@@ -74,16 +73,15 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         continue
 
                 # Re-choose token box among non-selected boxes
-                if chosen_box in legal_boxes:
+                if chosen_box is None or not chosen_box in legal_boxes: # Invalid or wrong answer
+                    token_box = random.choice(legal_boxes)
+                    legal_boxes.remove(token_box)
+                else:                                                   # Potentially correct answer, generate different token box
                     legal_boxes.remove(chosen_box)
                     token_box = random.choice(legal_boxes)
                     legal_boxes.remove(token_box)
                     legal_boxes.append(chosen_box)
-                else:
-                    token_box = random.choice(legal_boxes)
-                    legal_boxes.remove(token_box)
-
-            if token_box is None:
+            else:                                                       # No choice but to choose the last box
                 token_box = random.choice(legal_boxes)
                 legal_boxes.remove(token_box)
 
