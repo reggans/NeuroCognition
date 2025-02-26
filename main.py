@@ -65,15 +65,18 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
 
                 # Re-choose token box among non-selected boxes
                 if chosen_box in legal_boxes:
+                    tqdm.write("Repicked")
                     legal_boxes.remove(chosen_box)
                     token_box = random.choice(legal_boxes)
                     legal_boxes.remove(token_box)
                     legal_boxes.append(chosen_box)
                 else:
+                    tqdm.write("Valid, not repicked")
                     token_box = random.choice(legal_boxes)
                     legal_boxes.remove(token_box)
 
             if chosen_box is None:
+                tqdm.write("Invalid")
                 token_box = random.choice(legal_boxes)
                 legal_boxes.remove(token_box)
                             
