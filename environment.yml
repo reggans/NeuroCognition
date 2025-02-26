@@ -16,4 +16,5 @@ dependencies:
       - transformers==4.49.0
       - google-generativeai==0.8.4
       - accelerate>=0.26.0
+      - bitsandbytes
 prefix: /home/faeyza/miniconda3/envs/swm
