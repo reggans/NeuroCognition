@@ -10,6 +10,16 @@ import random, json, re, argparse, os
 from model_wrapper import ModelWrapper
 
 def run_swm(model, n_boxes, cot=None):
+    """
+    Run the Spatial Working Memory (SWM) test with the given model.
+    Args:
+        model (ModelWrapper): The model to use.
+        n_boxes (int): The number of boxes in the test.
+        cot (str): The type of CoT to use. Either "implicit" or "explicit".
+        verbose (bool): Whether to print verbose output.
+    Returns:
+        dict: The run statistics.
+    """
     # Initiate w/ task prompt
     task_prompt = f"""You will be performing the Spatial Working Memory (SWM) test.
 {n_boxes} boxes will be presented to you, one of which contains a token.
@@ -65,24 +75,21 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
 
                 # Re-choose token box among non-selected boxes
                 if chosen_box in legal_boxes:
-                    tqdm.write("Repicked")
                     legal_boxes.remove(chosen_box)
                     token_box = random.choice(legal_boxes)
                     legal_boxes.remove(token_box)
                     legal_boxes.append(chosen_box)
                 else:
-                    tqdm.write("Valid, not repicked")
                     token_box = random.choice(legal_boxes)
                     legal_boxes.remove(token_box)
 
             if token_box is None:
-                tqdm.write("Invalid")
                 token_box = random.choice(legal_boxes)
                 legal_boxes.remove(token_box)
-                            
-            tqdm.write(f"Round {i+1}")
-            tqdm.write(f"Answer: Box {token_box}")
-            tqdm.write(f"Legal boxes: {legal_boxes}")
+
+            # tqdm.write(f"Round {i+1}")
+            # tqdm.write(f"Answer: Box {token_box}")
+            # tqdm.write(f"Legal boxes: {legal_boxes}")
 
             found = False
             while not found:
