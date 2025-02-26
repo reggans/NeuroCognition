@@ -50,7 +50,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
             illegal_guesses.append(0)
             invalid_guesses.append(0)
 
-            chosen_box = None
+            token_box = None
             # TODO - If answer is invalid, wait for a valid first answer before re-choosing token box
             if len(legal_boxes) > 1:
                 # Ensure no lucky first guess
@@ -75,7 +75,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     token_box = random.choice(legal_boxes)
                     legal_boxes.remove(token_box)
 
-            if chosen_box is None:
+            if token_box is None:
                 tqdm.write("Invalid")
                 token_box = random.choice(legal_boxes)
                 legal_boxes.remove(token_box)
