@@ -1,6 +1,7 @@
 import google.generativeai as genai
 import transformers
 from huggingface_hub import login
+import torch
 
 import os
 
@@ -87,4 +88,7 @@ class ModelWrapper():
             response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
             self.history.append({"role": "model", "content": response})
             
+            model_inputs = None
+            generated_ids = None
+            torch.cuda.empty_cache()
         return response
