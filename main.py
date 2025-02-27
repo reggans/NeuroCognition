@@ -143,14 +143,17 @@ if __name__ == "__main__":
     # parser.add_argument("--seed", type=int, default=42, help="The random seed.")
     parser.add_argument("--api_key", type=str, default=None, help="API key to use. If none, uses key stored in environment variable.")
     args = parser.parse_args()
-
-    model = ModelWrapper(args.model, api_key=args.api_key)
     
     run_stats = {}
+    run_history = {}
     for i in range(args.runs):
         torch.cuda.empty_cache()
+        model = ModelWrapper(args.model, api_key=args.api_key)
+
         print(f"Run {i+1}/{args.runs}")
         run_stats[f"run_{i+1}"] = run_swm(model, args.n_boxes, cot=args.cot)
+        run_history[f"run_{i+1}"] = model.history
+
 
     avg_stats = {}
     for key in run_stats["run_1"].keys():
