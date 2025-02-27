@@ -147,8 +147,10 @@ if __name__ == "__main__":
     run_stats = {}
     run_history = {}
     for i in range(args.runs):
-        model = ModelWrapper(args.model, api_key=args.api_key)
+        model = None
         torch.cuda.empty_cache()
+        
+        model = ModelWrapper(args.model, api_key=args.api_key)
 
         print(f"Run {i+1}/{args.runs}")
         run_stats[f"run_{i+1}"] = run_swm(model, args.n_boxes, cot=args.cot)
