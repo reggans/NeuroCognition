@@ -5,9 +5,9 @@ from huggingface_hub import login
 import os
 
 class ModelWrapper():
-    def __init__(self, model_name, api_key=None):
+    def __init__(self, model_name, model_source, api_key=None):
         # Gemini API
-        if model_name == "gemini":
+        if model_source == "google":
             if api_key is None:
                 if os.getenv("GOOGLE_API_KEY") is not None:
                     api_key = os.getenv("GOOGLE_API_KEY")
@@ -15,10 +15,10 @@ class ModelWrapper():
                     raise ValueError("Please set the GOOGLE_API_KEY environment variable or pass it to the CLI.")
             genai.configure(api_key=api_key)
 
-            self.model = genai.GenerativeModel()
+            self.model = genai.GenerativeModel(model_name)
             self.tokenizer = None
         # Get model from Hugging Face
-        else:
+        elif model_source == "hf":
             if api_key is None:
                 if os.getenv("HF_TOKEN") is not None:
                     api_key = os.getenv("HF_TOKEN")
@@ -34,9 +34,10 @@ class ModelWrapper():
         self.chat = None # Specific to Gemini API, None otherwise
         self.history = None
         self.model_name = model_name
+        self.model_source = model_source
     
     def init_chat(self, task_prompt):
-        if self.model_name == "gemini":
+        if self.model_source == "google":
             # Start Gemini chat
             self.chat = self.model.start_chat(
                 history = [
@@ -50,13 +51,13 @@ class ModelWrapper():
                 {"role": "user", "content": task_prompt},
                 {"role": "model", "content": "Understood, lets start."},
             ]
-        else:
+        elif self.model_source == "hf":
             self.history = [
                 {"role": "system", "content": task_prompt},
             ]
     
     def send_message(self, message, max_new_tokens=512):
-        if self.model_name == "gemini":
+        if self.model_source == "google":
             response = self.chat.send_message(message).text
 
             # Add to history
@@ -64,7 +65,7 @@ class ModelWrapper():
                 {"role": "user", "content": message},
                 {"role": "model", "content": response}
             ])
-        else:
+        elif self.model_source == "hf":
             self.history.append(
                 {"role": "user", "content": message}
             )

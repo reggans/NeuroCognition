@@ -136,13 +136,26 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the SWM toy problem.")
-    parser.add_argument("--model", type=str, default="gemini", help="The model to use.")
+    parser.add_argument("--model", type=str, default=None, help="The model to use.")
+    parser.add_argument("--model_source", type=str, default="hf", help="The source of the model.")
     parser.add_argument("--n_boxes", type=int, default=6, help="The number of boxes in the test. More == harder.")
     parser.add_argument("--cot", type=str, default=None, help="The type of CoT to use.")
     parser.add_argument("--runs", type=int, default=1, help="The number of runs to perform.")
     # parser.add_argument("--seed", type=int, default=42, help="The random seed.")
     parser.add_argument("--api_key", type=str, default=None, help="API key to use. If none, uses key stored in environment variable.")
     args = parser.parse_args()
+
+    # Input validation
+    if args.cot is not None and args.cot not in ["implicit", "explicit"]:
+        raise ValueError("CoT must be None, or either of 'implicit' or 'explicit'")
+    if args.model_source not in ["hf", "google"]:
+        raise ValueError("Model source must be either 'hf' or 'google'")
+    
+    if args.model is None:
+        if args.model_source == "hf":
+            args.model = "unsloth/Meta-Llama-3.1-8B-Instruct"
+        elif args.model_source == "google":
+            args.model = "gemini-1.5-flash-8b"
     
     run_stats = {}
     run_history = {}
@@ -150,7 +163,7 @@ if __name__ == "__main__":
         model = None
         torch.cuda.empty_cache()
         
-        model = ModelWrapper(args.model, api_key=args.api_key)
+        model = ModelWrapper(args.model, args.model_source, api_key=args.api_key)
 
         print(f"Run {i+1}/{args.runs}")
         run_stats[f"run_{i+1}"] = run_swm(model, args.n_boxes, cot=args.cot)
@@ -168,4 +181,4 @@ if __name__ == "__main__":
         json.dump(run_stats, f)
     
     with open("run_history.json", "w") as f:
-        json.dump(model.history, f)
+        json.dump(run_history, f)
