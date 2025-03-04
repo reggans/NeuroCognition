@@ -22,7 +22,7 @@ class ModelWrapper():
         elif model_source == "hf":
             if api_key is None:
                 if os.getenv("HF_TOKEN") is not None:
-                    api_key = os.getenv("HF_TOKEN")
+                    api_key = os.getenv("HF_TOKEN") 
                 else:
                     raise ValueError("Please set the HF_TOKEN environment variable or pass it to the CLI.")
             login(token=api_key)

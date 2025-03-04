@@ -62,6 +62,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
 
             # TODO - If answer is invalid, wait for a valid first answer before re-choosing token box
             # Ensure no lucky first guess
+            chosen_box = None
             if len(legal_boxes) > 1: 
                 if re.search(r"<ANS>(?s:.*)</ANS>", response) is not None:
                     chosen_box = re.search(r"<ANS>(?s:.*)</ANS>", response)[0]
