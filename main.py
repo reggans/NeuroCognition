@@ -116,6 +116,10 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     if chosen_box not in legal_boxes:
                         illegal_guesses[-1] += 1
                     response = model.send_message(f"EMPTY\nBox {chosen_box} is empty.\nTokens found: {i}\n" + question)
+                
+                # Save to temp file
+                with open("temp_history.json", "w") as f:
+                    json.dump(model.history, f)
 
                 if sum(n_guesses) > 2*worst_case_n:
                     break
@@ -170,6 +174,12 @@ if __name__ == "__main__":
         run_stats[f"run_{i+1}"] = run_swm(model, args.n_boxes, cot=args.cot)
         run_history[f"run_{i+1}"] = model.history
 
+        with open("run_stats.json", "w") as f:
+            json.dump(run_stats, f)
+        
+        with open("run_history.json", "w") as f:
+            json.dump(run_history, f)
+
 
     avg_stats = {}
     for key in run_stats["run_1"].keys():
@@ -177,9 +187,3 @@ if __name__ == "__main__":
     
     for key, value in avg_stats.items():
         print(f"{key}: {value}")
-    
-    with open("run_stats.json", "w") as f:
-        json.dump(run_stats, f)
-    
-    with open("run_history.json", "w") as f:
-        json.dump(run_history, f)
