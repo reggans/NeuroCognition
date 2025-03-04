@@ -54,7 +54,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
 
     # Start the test
     response = model.send_message(question)
-    with tqdm(total=3*worst_case_n, desc="Total guesses") as pbar:
+    with tqdm(total=2*worst_case_n, desc="Total guesses") as pbar:
         for i in tqdm(range(n_boxes), total=n_boxes, desc="Rounds"):
             n_guesses.append(0)
             illegal_guesses.append(0)
@@ -117,10 +117,10 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         illegal_guesses[-1] += 1
                     response = model.send_message(f"EMPTY\nBox {chosen_box} is empty.\nTokens found: {i}\n" + question)
 
-                if sum(n_guesses) > 3*worst_case_n:
+                if sum(n_guesses) > 2*worst_case_n:
                     break
 
-            if sum(n_guesses) > 3*worst_case_n:
+            if sum(n_guesses) > 2*worst_case_n:
                 break
     
     run_stats = {
