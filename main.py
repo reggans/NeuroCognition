@@ -95,6 +95,13 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                 n_guesses[-1] += 1
                 pbar.update(1)
 
+                # Save to temp file
+                with open("temp_history.json", "w") as f:
+                    json.dump(model.history, f)
+
+                if sum(n_guesses) > 2*worst_case_n:
+                    break
+
                 if re.search(r"<ANS>(?s:.*)</ANS>", response) is not None:
                     chosen_box = re.search(r"<ANS>(?s:.*)</ANS>", response)[0]
                     chosen_box = re.sub(r"<ANS>|</ANS>", "", chosen_box).strip()
@@ -117,13 +124,10 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         illegal_guesses[-1] += 1
                     response = model.send_message(f"EMPTY\nBox {chosen_box} is empty.\nTokens found: {i}\n" + question)
                 
-                # Save to temp file
-                with open("temp_history.json", "w") as f:
-                    json.dump(model.history, f)
-
-                if sum(n_guesses) > 2*worst_case_n:
-                    break
-
+            # Save to temp file
+            with open("temp_history.json", "w") as f:
+                json.dump(model.history, f)
+            
             if sum(n_guesses) > 2*worst_case_n:
                 break
     
@@ -140,7 +144,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
     return run_stats
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run the SWM toy problem.")
+    parser = argparse.ArgumentParser(description="Run the SWM problem.")
     parser.add_argument("--model", type=str, default=None, help="The model to use.")
     parser.add_argument("--model_source", type=str, default="hf", help="The source of the model.")
     parser.add_argument("--n_boxes", type=int, default=6, help="The number of boxes in the test. More == harder.")
