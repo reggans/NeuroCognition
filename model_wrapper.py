@@ -6,7 +6,7 @@ import torch
 import os
 
 class ModelWrapper():
-    def __init__(self, model_name, model_source, api_key=None):
+    def __init__(self, model_name, model_source, api_key=None, max_new_tokens=512):
         # Gemini API
         if model_source == "google":
             if api_key is None:
@@ -36,6 +36,7 @@ class ModelWrapper():
         self.history = None
         self.model_name = model_name
         self.model_source = model_source
+        self.max_new_tokens = max_new_tokens
     
     def init_chat(self, task_prompt):
         if self.model_source == "google":
@@ -57,7 +58,7 @@ class ModelWrapper():
                 {"role": "system", "content": task_prompt},
             ]
     
-    def send_message(self, message, max_new_tokens=512):
+    def send_message(self, message, max_new_tokens=None):
         if self.model_source == "google":
             response = self.chat.send_message(message).text
 
@@ -67,6 +68,9 @@ class ModelWrapper():
                 {"role": "model", "content": response}
             ])
         elif self.model_source == "hf":
+            if max_new_tokens is None:
+                max_new_tokens = self.max_new_tokens
+                
             self.history.append(
                 {"role": "user", "content": message}
             )
