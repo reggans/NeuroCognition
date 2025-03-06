@@ -84,7 +84,8 @@ class ModelWrapper():
             model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
             generated_ids = self.model.generate(
                 **model_inputs,
-                max_new_tokens=max_new_tokens
+                max_new_tokens=max_new_tokens,
+                do_sample=True,
             )
             generated_ids = [
                 output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
