@@ -41,9 +41,9 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
             cot_prompt = cot_prompt + "Track the boxes where the tokens have been found before.\n"""
         else:
             raise ValueError("CoT must be None, or either of 'implicit' or 'explicit'.")
-        question = f"{cot_prompt}Which of the {n_boxes} boxes would you like to open?\nState your final answer by wrapping it with <ANS> and </ANS>"
+        question = f"Answer concisely. {cot_prompt}Which of the {n_boxes} boxes would you like to open?\nState your final answer by wrapping it with <ANS> and </ANS>"
     else:
-        question = f"Which of the {n_boxes} boxes would you like to open?\nState your final answer by wrapping it with <ANS> and </ANS>"
+        question = f"Answer concisely. Which of the {n_boxes} boxes would you like to open?\nState your final answer by wrapping it with <ANS> and </ANS>"
 
     # Initialize run statistics & variables
     legal_boxes = [x for x in range(1, n_boxes+1)]
