@@ -71,7 +71,6 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         chosen_box = int(chosen_box)
                     except ValueError:
                         chosen_box = None
-                        continue
 
                 # Re-choose token box among non-selected boxes
                 if chosen_box is None or not chosen_box in legal_boxes: # Invalid or wrong answer
