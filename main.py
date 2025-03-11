@@ -157,14 +157,16 @@ if __name__ == "__main__":
     # Input validation
     if args.cot is not None and args.cot not in ["implicit", "explicit"]:
         raise ValueError("CoT must be None, or either of 'implicit' or 'explicit'")
-    if args.model_source not in ["hf", "google"]:
-        raise ValueError("Model source must be either 'hf' or 'google'")
+    if args.model_source not in ["hf", "google", "litellm"]:
+        raise ValueError("Model source must be either 'hf', 'google', or 'litellm'.")
     
     if args.model is None:
         if args.model_source == "hf":
             args.model = "unsloth/Meta-Llama-3.1-8B-Instruct"
         elif args.model_source == "google":
             args.model = "gemini-1.5-flash-8b"
+        elif args.model_source == "litellm":
+            args.model = "openai/gpt-4o-mini-2024-07-18"
     
     run_stats = {}
     run_history = {}
