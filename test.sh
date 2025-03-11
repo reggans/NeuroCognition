@@ -1,0 +1,1 @@
+python main.py --model unsloth/QwQ-32B-unsloth-bnb-4bit --model_source hf --max_tokens 2048 --runs 5 --n_boxes 8
