@@ -28,8 +28,9 @@ class ModelWrapper():
             login(token=api_key)
 
             self.model = transformers.AutoModelForCausalLM.from_pretrained(model_name,
-                                                                    torch_dtype="auto",
-                                                                    device_map="auto")
+                                                                           attn_implementation='flash_attention_2',
+                                                                           torch_dtype="auto",
+                                                                           device_map="auto")
             self.tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
         
         self.chat = None # Specific to Gemini API, None otherwise
