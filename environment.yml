@@ -17,5 +17,5 @@ dependencies:
       - google-generativeai==0.8.4
       - accelerate>=0.26.0
       - bitsandbytes
-      - flash-attn
+      - openai
 prefix: /home/faeyza/miniconda3/envs/swm
