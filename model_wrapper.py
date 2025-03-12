@@ -120,7 +120,7 @@ class ModelWrapper():
                 {"role": "user", "content": message}
             )
 
-            response = self.client.chat.completions.craete(
+            response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=self.history
             )
