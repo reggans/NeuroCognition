@@ -166,7 +166,7 @@ if __name__ == "__main__":
         elif args.model_source == "google":
             args.model = "gemini-1.5-flash-8b"
         elif args.model_source == "litellm":
-            args.model = "openai/gpt-4o-mini-2024-07-18"
+            args.model = "gpt-4o-mini-2024-07-18"
     
     run_stats = {}
     run_history = {}
