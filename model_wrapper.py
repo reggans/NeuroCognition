@@ -124,7 +124,7 @@ class ModelWrapper():
                 model=self.model_name,
                 messages=self.history
             )
-            response = response["choices"]["message"]["content"]
+            response = response[0]["choices"]["message"]["content"]
 
             self.history.append({"role": "model", "content": response})
 
