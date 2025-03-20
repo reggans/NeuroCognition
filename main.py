@@ -155,10 +155,12 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
         "total_guesses": sum(n_guesses),
         "total_illegal": sum(illegal_guesses),
         "total_invalid": sum(invalid_guesses),
+        "total_repeated": sum(repeated_guesses),
         "worst_case_guesses": worst_case_n,
         "illegal": illegal_guesses,
         "guesses": n_guesses,
-        "invalid": invalid_guesses
+        "invalid": invalid_guesses,
+        "repeated": repeated_guesses
     }
 
     return run_stats
