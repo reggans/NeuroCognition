@@ -21,8 +21,8 @@ def run_swm(model, n_boxes, cot=None):
         dict: The run statistics.
     """
     # Initiate w/ task prompt
-    task_prompt = f"""You will be performing the Spatial Working Memory (SWM) test.
-{n_boxes} boxes will be presented to you, one of which contains a token.
+    task_prompt = f"""You will be performing a text version of the Spatial Working Memory (SWM) test.
+There are {n_boxes} boxes, one of which contains a token.
 Your goal is to find {n_boxes} tokens by repeatedly selecting a box to open.
 If the box contains a token, I will respond with "TOKEN".
 If the box is empty, I will respond with "EMPTY".
@@ -95,7 +95,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                 pbar.update(1)
 
                 # Save to temp file
-                with open("temp_history.json", "w") as f:
+                with open("data/temp_history.json", "w") as f:
                     json.dump(model.history, f)
 
                 if sum(n_guesses) > 2*worst_case_n:
@@ -124,7 +124,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     response = model.send_message(f"EMPTY\nBox {chosen_box} is empty.\nTokens found: {i}\n" + question)
                 
             # Save to temp file
-            with open("temp_history.json", "w") as f:
+            with open("data/temp_history.json", "w") as f:
                 json.dump(model.history, f)
             
             if sum(n_guesses) > 2*worst_case_n:
@@ -141,6 +141,16 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
     }
 
     return run_stats
+
+def score(run_stats):
+    """
+    Score the run statistics from the SWM test.
+    Args:
+        run_stats (dict): The run statistics.
+    Returns:
+        float: The score.
+    """
+    return run_stats["total_guesses"] / run_stats["worst_case_guesses"]
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the SWM problem.")
@@ -168,6 +178,11 @@ if __name__ == "__main__":
         elif args.model_source == "litellm":
             args.model = "gpt-4o-mini-2024-07-18"
     
+    if not os.path.isdir("./data"):
+        os.mkdir("./data")
+
+    file_header = f"data/{args.model_source}_{args.model.replace("/", "-")}{"_" + args.cot if args.cot is not None else ''}_{args.n_boxes}_"
+    
     run_stats = {}
     run_history = {}
     for i in range(args.runs):
@@ -180,10 +195,10 @@ if __name__ == "__main__":
         run_stats[f"run_{i+1}"] = run_swm(model, args.n_boxes, cot=args.cot)
         run_history[f"run_{i+1}"] = model.history
 
-        with open("run_stats.json", "w") as f:
+        with open(file_header + "run_stats.json", "w") as f:
             json.dump(run_stats, f)
         
-        with open("run_history.json", "w") as f:
+        with open(file_header + "run_history.json", "w") as f:
             json.dump(run_history, f)
 
 
