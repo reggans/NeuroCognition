@@ -46,48 +46,53 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
         question = f"Answer concisely. Which of the {n_boxes} boxes would you like to open?\nState your final answer by wrapping it with <ANS> and </ANS>"
 
     # Initialize run statistics & variables
-    legal_boxes = [x for x in range(1, n_boxes+1)]
+    legal_boxes = set(x for x in range(1, n_boxes+1))
     worst_case_n = sum(legal_boxes)
     n_guesses = []
     illegal_guesses = []
     invalid_guesses = []
+    repeated_guesses = [] 
 
     # Start the test
+    # Modified: Any chosen box will be empty unless it is the last legal box
     response = model.send_message(question)
     with tqdm(total=2*worst_case_n, desc="Total guesses") as pbar:
         for i in tqdm(range(n_boxes), total=n_boxes, desc="Rounds"):
             n_guesses.append(0)
             illegal_guesses.append(0)
             invalid_guesses.append(0)
+            repeated_guesses.append(0)
 
-            # TODO - If answer is invalid, wait for a valid first answer before re-choosing token box
+            # Track opened boxes in this trial
+            opened_boxes = []
+
             # Ensure no lucky first guess
-            chosen_box = None
-            if len(legal_boxes) > 1: 
-                if re.search(r"<ANS>(?s:.*)</ANS>", response) is not None:
-                    chosen_box = re.search(r"<ANS>(?s:.*)</ANS>", response)[0]
-                    chosen_box = re.sub(r"<ANS>|</ANS>", "", chosen_box).strip()
-                    try:
-                        chosen_box = int(chosen_box)
-                    except ValueError:
-                        chosen_box = None
+            # chosen_box = None
+            # if len(legal_boxes) > 1: 
+            #     if re.search(r"<ANS>(?s:.*)</ANS>", response) is not None:
+            #         chosen_box = re.search(r"<ANS>(?s:.*)</ANS>", response)[0]
+            #         chosen_box = re.sub(r"<ANS>|</ANS>", "", chosen_box).strip()
+            #         try:
+            #             chosen_box = int(chosen_box)
+            #         except ValueError:
+            #             chosen_box = None
 
-                # Re-choose token box among non-selected boxes
-                if chosen_box is None or not chosen_box in legal_boxes: # Invalid or wrong answer
-                    token_box = random.choice(legal_boxes)
-                    legal_boxes.remove(token_box)
-                else:                                                   # Potentially correct answer, generate different token box
-                    legal_boxes.remove(chosen_box)
-                    token_box = random.choice(legal_boxes)
-                    legal_boxes.remove(token_box)
-                    legal_boxes.append(chosen_box)
-            else:                                                       # No choice but to choose the last box
-                token_box = random.choice(legal_boxes)
-                legal_boxes.remove(token_box)
+            #     # Re-choose token box among non-selected boxes
+            #     if chosen_box is None or not chosen_box in legal_boxes: # Invalid or wrong answer
+            #         token_box = random.choice(legal_boxes)
+            #         legal_boxes.remove(token_box)
+            #     else:                                                   # Potentially correct answer, generate different token box
+            #         legal_boxes.remove(chosen_box)
+            #         token_box = random.choice(legal_boxes)
+            #         legal_boxes.remove(token_box)
+            #         legal_boxes.append(chosen_box)
+            # else:                                                       # No choice but to choose the last box
+            #     token_box = random.choice(legal_boxes)
+            #     legal_boxes.remove(token_box)
 
-            # tqdm.write(f"Round {i+1}")
-            # tqdm.write(f"Answer: Box {token_box}")
-            # tqdm.write(f"Legal boxes: {legal_boxes}")
+            # # tqdm.write(f"Round {i+1}")
+            # # tqdm.write(f"Answer: Box {token_box}")
+            # # tqdm.write(f"Legal boxes: {legal_boxes}")
 
             found = False
             while not found:
@@ -115,13 +120,29 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     invalid_guesses[-1] += 1
                     continue
 
-                if chosen_box == token_box:
-                    response = model.send_message(f"TOKEN\nBox {chosen_box} contains a token.\nTokens found: {i+1}\n" + question)
-                    found = True
-                else:
-                    if chosen_box not in legal_boxes:
-                        illegal_guesses[-1] += 1
+                # if chosen_box == token_box:
+                #     response = model.send_message(f"TOKEN\nBox {chosen_box} contains a token.\nTokens found: {i+1}\n" + question)
+                #     found = True
+                # else:
+                #     if chosen_box not in legal_boxes:
+                #         illegal_guesses[-1] += 1
+                #     response = model.send_message(f"EMPTY\nBox {chosen_box} is empty.\nTokens found: {i}\n" + question)
+
+                if chosen_box in opened_boxes:
                     response = model.send_message(f"EMPTY\nBox {chosen_box} is empty.\nTokens found: {i}\n" + question)
+                    repeated_guesses[-1] += 1
+                else:
+                    opened_boxes.append(chosen_box)
+
+                    if chosen_box not in legal_boxes:
+                        response = model.send_message(f"EMPTY\nBox {chosen_box} is empty.\nTokens found: {i}\n" + question)
+                        illegal_guesses[-1] += 1
+                    
+                    if len(legal_boxes.intersection(opened_boxes)) == len(legal_boxes):
+                        response = model.send_message(f"TOKEN\nBox {chosen_box} contains a token.\nTokens found: {i+1}\n" + question)
+                        found = True
+                        legal_boxes.remove(chosen_box)
+                
                 
             # Save to temp file
             with open("data/temp_history.json", "w") as f:
@@ -204,7 +225,8 @@ if __name__ == "__main__":
 
     avg_stats = {}
     for key in run_stats["run_1"].keys():
-        avg_stats[key] = np.mean([stats[key] for stats in run_stats.values()])
+        if type(run_stats["run_1"][key]) == int:
+            avg_stats[key] = np.mean([stats[key] for stats in run_stats.values()])
     
     for key, value in avg_stats.items():
         print(f"{key}: {value}")
