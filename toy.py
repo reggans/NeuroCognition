@@ -6,24 +6,30 @@ args = parser.parse_args()
 
 question = "Which box would you like to open?\n"
 
-legal_boxes = [x for x in range(1, args.num_boxes + 1)]
+legal_boxes = set(x for x in range(1, args.num_boxes+1))
 worst_case_n = sum(legal_boxes)
 n_guesses = []
-for i in range(1, args.num_boxes + 1):
+for i in range(args.num_boxes):
   n_guesses.append(0)
-  token_box = random.choice(legal_boxes)
-  legal_boxes.remove(token_box)
+
+  opened_boxes = []
   
   found = False
   while not found:
     print(f"Found tokens: {i}")
     response = input(question).strip()
-    chosen_box = int(response.split("ANSWER: ")[-1].strip())
-    if chosen_box == token_box:
-      print("TOKEN")
+    
+    # Track opened boxes in this round
+    opened_boxes.append(int(response))
+
+    # If chosen box is the last legal box, it contains a token
+    if len(legal_boxes.intersection(opened_boxes)) == len(legal_boxes):
       found = True
+      legal_boxes.remove(int(response))
+      print("FOUND!")
     else:
-      print("EMPTY")
+      print("EMPTY!")
+    
     n_guesses[-1] += 1
 print(f"Worst case guesses: {worst_case_n}")
 print(f"Total number of guesses: {sum(n_guesses)}")
