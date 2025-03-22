@@ -85,11 +85,11 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     try:
                         chosen_box = int(chosen_box)
                     except ValueError:
-                        response = model.send_message("Please answer with the specified format\nTokens found: {i}\n" + question)
+                        response = model.send_message(f"Please answer with the specified format\nTokens found: {i}\n" + question)
                         invalid_guesses[-1] += 1
                         continue
                 else:
-                    response = model.send_message("Please answer with the specified format\nTokens found: {i}\n" + question)
+                    response = model.send_message(f"Please answer with the specified format\nTokens found: {i}\n" + question)
                     invalid_guesses[-1] += 1
                     continue
 
@@ -104,7 +104,8 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         illegal_guesses[-1] += 1
                     
                     elif len(legal_boxes.intersection(opened_boxes)) == len(legal_boxes):
-                        response = model.send_message(f"TOKEN\nBox {chosen_box} contains a token.\nTokens found: {i+1}\n" + question)
+                        if i < n_boxes-1:
+                            response = model.send_message(f"TOKEN\nBox {chosen_box} contains a token.\nTokens found: {i+1}\n" + question)
                         found = True
                         legal_boxes.remove(chosen_box)
                 
