@@ -98,20 +98,18 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     repeated_guesses[-1] += 1
                 else:              
                     opened_boxes.append(chosen_box)
-
-                    if chosen_box not in legal_boxes:    
-                        response = model.send_message(f"EMPTY\nBox {chosen_box} is empty.\nTokens found: {i}\n" + question)
-                        illegal_guesses[-1] += 1
                     
-                    elif len(legal_boxes.intersection(opened_boxes)) == len(legal_boxes):
+                    if len(legal_boxes.intersection(opened_boxes)) == len(legal_boxes):
                         if i < n_boxes-1:
                             response = model.send_message(f"TOKEN\nBox {chosen_box} contains a token.\nTokens found: {i+1}\n" + question)
                         found = True
                         legal_boxes.remove(chosen_box)
-                
-                print(i)
+                    else:
+                        response = model.send_message(f"EMPTY\nBox {chosen_box} is empty.\nTokens found: {i}\n" + question)
+                        if chosen_box not in legal_boxes:    
+                            illegal_guesses[-1] += 1
+
                 print(f"{n_guesses[-1]}: {chosen_box}")
-                
                 
             # Save to temp file
             with open("data/temp_history.json", "w") as f:
