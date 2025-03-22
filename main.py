@@ -109,6 +109,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         found = True
                         legal_boxes.remove(chosen_box)
                 
+                print(i)
                 print(f"{n_guesses[-1]}: {chosen_box}")
                 
                 
