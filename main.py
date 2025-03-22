@@ -113,14 +113,15 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                 opened_boxes.append(chosen_box)
 
                 # After first guess, choose a box for the token excluding the chosen box
-                if len(opened_boxes) == 1:
+                if len(opened_boxes) == 1 and token_box is None:
                     legal_boxes.remove(chosen_box)
                     token_box = random.choice(legal_boxes)
                     legal_boxes.append(chosen_box)
 
                 if chosen_box == token_box:
-                     response = model.send_message(f"TOKEN\nBox {chosen_box} contains a token.\nTokens found: {i+1}\n" + question)
-                     found = True
+                    response = model.send_message(f"TOKEN\nBox {chosen_box} contains a token.\nTokens found: {i+1}\n" + question)
+                    legal_boxes.remove(token_box)
+                    found = True
                 else:
                     response = model.send_message(f"EMPTY\nBox {chosen_box} is empty.\nTokens found: {i}\n" + question)
 
