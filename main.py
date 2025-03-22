@@ -62,34 +62,10 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
             illegal_guesses.append(0)
             invalid_guesses.append(0)
             repeated_guesses.append(0)
+            token_box = None
 
             # Track opened boxes in this trial
             opened_boxes = []
-
-            # Ensure no lucky first guess
-            chosen_box = None
-            if len(legal_boxes) > 1: 
-                if re.search(r"<ANS>(?s:.*)</ANS>", response) is not None:
-                    chosen_box = re.search(r"<ANS>(?s:.*)</ANS>", response)[0]
-                    chosen_box = re.sub(r"<ANS>|</ANS>", "", chosen_box).strip()
-                    try:
-                        chosen_box = int(chosen_box)
-                    except ValueError:
-                        chosen_box = None
-
-                # Re-choose token box among non-selected boxes
-                if chosen_box is None or not chosen_box in legal_boxes: # Invalid or wrong answer
-                    token_box = random.choice(legal_boxes)
-                    legal_boxes.remove(token_box)
-                else:                                                   # Potentially correct answer, generate different token box
-                    legal_boxes.remove(chosen_box)
-                    token_box = random.choice(legal_boxes)
-                    legal_boxes.remove(token_box)
-                    legal_boxes.append(chosen_box)
-            else:                                                       # No choice but to choose the last box
-                token_box = random.choice(legal_boxes)
-                legal_boxes.remove(token_box)
-
 
             found = False
             while not found:
@@ -135,6 +111,12 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                 #             illegal_guesses[-1] += 1
 
                 opened_boxes.append(chosen_box)
+
+                # After first guess, choose a box for the token excluding the chosen box
+                if len(opened_boxes) == 1:
+                    legal_boxes.remove(chosen_box)
+                    token_box = random.choice(legal_boxes)
+                    legal_boxes.append(chosen_box)
 
                 if chosen_box == token_box:
                      response = model.send_message(f"TOKEN\nBox {chosen_box} contains a token.\nTokens found: {i+1}\n" + question)
