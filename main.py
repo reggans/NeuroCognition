@@ -113,7 +113,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                 opened_boxes.append(chosen_box)
 
                 # After first guess, choose a box for the token excluding the chosen box
-                if len(opened_boxes) == 1 and token_box is None:
+                if token_box is None and len(set(legal_boxes).intersection(opened_boxes)) == 1:
                     if len(legal_boxes) == 1:
                         token_box = legal_boxes[0]
                     else:
