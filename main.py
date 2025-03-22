@@ -46,7 +46,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
         question = f"Answer concisely. Which of the {n_boxes} boxes would you like to open?\nState your final answer by wrapping it with <ANS> and </ANS>"
 
     # Initialize run statistics & variables
-    legal_boxes = set(x for x in range(1, n_boxes+1))
+    legal_boxes = [x for x in range(1, n_boxes+1)]
     worst_case_n = sum(legal_boxes)
     n_guesses = []
     illegal_guesses = []
@@ -141,7 +141,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                      found = True
                 else:
                     response = model.send_message(f"EMPTY\nBox {chosen_box} is empty.\nTokens found: {i}\n" + question)
-                    
+
                     if chosen_box not in legal_boxes:
                          illegal_guesses[-1] += 1
                     if chosen_box in opened_boxes:
