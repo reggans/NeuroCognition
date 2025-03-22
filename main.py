@@ -66,37 +66,10 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
             # Track opened boxes in this trial
             opened_boxes = []
 
-            # Ensure no lucky first guess
-            # chosen_box = None
-            # if len(legal_boxes) > 1: 
-            #     if re.search(r"<ANS>(?s:.*)</ANS>", response) is not None:
-            #         chosen_box = re.search(r"<ANS>(?s:.*)</ANS>", response)[0]
-            #         chosen_box = re.sub(r"<ANS>|</ANS>", "", chosen_box).strip()
-            #         try:
-            #             chosen_box = int(chosen_box)
-            #         except ValueError:
-            #             chosen_box = None
-
-            #     # Re-choose token box among non-selected boxes
-            #     if chosen_box is None or not chosen_box in legal_boxes: # Invalid or wrong answer
-            #         token_box = random.choice(legal_boxes)
-            #         legal_boxes.remove(token_box)
-            #     else:                                                   # Potentially correct answer, generate different token box
-            #         legal_boxes.remove(chosen_box)
-            #         token_box = random.choice(legal_boxes)
-            #         legal_boxes.remove(token_box)
-            #         legal_boxes.append(chosen_box)
-            # else:                                                       # No choice but to choose the last box
-            #     token_box = random.choice(legal_boxes)
-            #     legal_boxes.remove(token_box)
-
-            # # tqdm.write(f"Round {i+1}")
-            # # tqdm.write(f"Answer: Box {token_box}")
-            # # tqdm.write(f"Legal boxes: {legal_boxes}")
-
             found = False
             while not found:
                 n_guesses[-1] += 1
+                print(n_guesses[-1])
                 pbar.update(1)
 
                 # Save to temp file
@@ -105,7 +78,8 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
 
                 if sum(n_guesses) > 2*worst_case_n:
                     break
-
+                
+                # Get and validate response
                 if re.search(r"<ANS>(?s:.*)</ANS>", response) is not None:
                     chosen_box = re.search(r"<ANS>(?s:.*)</ANS>", response)[0]
                     chosen_box = re.sub(r"<ANS>|</ANS>", "", chosen_box).strip()
@@ -120,26 +94,17 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     invalid_guesses[-1] += 1
                     continue
 
-                # if chosen_box == token_box:
-                #     response = model.send_message(f"TOKEN\nBox {chosen_box} contains a token.\nTokens found: {i+1}\n" + question)
-                #     found = True
-                # else:
-                #     if chosen_box not in legal_boxes:
-                #         illegal_guesses[-1] += 1
-                #     response = model.send_message(f"EMPTY\nBox {chosen_box} is empty.\nTokens found: {i}\n" + question)
-
-                if chosen_box in opened_boxes:
+                if chosen_box in opened_boxes:      
                     response = model.send_message(f"EMPTY\nBox {chosen_box} is empty.\nTokens found: {i}\n" + question)
                     repeated_guesses[-1] += 1
-                else:
+                else:              
                     opened_boxes.append(chosen_box)
 
-                    if chosen_box not in legal_boxes:
+                    if chosen_box not in legal_boxes:    
                         response = model.send_message(f"EMPTY\nBox {chosen_box} is empty.\nTokens found: {i}\n" + question)
                         illegal_guesses[-1] += 1
                     
-                    if len(legal_boxes.intersection(opened_boxes)) == len(legal_boxes):
-                        print(legal_boxes.intersection(opened_boxes))
+                    elif len(legal_boxes.intersection(opened_boxes)) == len(legal_boxes):
                         response = model.send_message(f"TOKEN\nBox {chosen_box} contains a token.\nTokens found: {i+1}\n" + question)
                         found = True
                         legal_boxes.remove(chosen_box)
