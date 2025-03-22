@@ -69,7 +69,6 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
             found = False
             while not found:
                 n_guesses[-1] += 1
-                print(n_guesses[-1])
                 pbar.update(1)
 
                 # Save to temp file
@@ -108,6 +107,8 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         response = model.send_message(f"TOKEN\nBox {chosen_box} contains a token.\nTokens found: {i+1}\n" + question)
                         found = True
                         legal_boxes.remove(chosen_box)
+                
+                print(f"{n_guesses[-1]}: {chosen_box}")
                 
                 
             # Save to temp file
