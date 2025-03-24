@@ -194,6 +194,7 @@ if __name__ == "__main__":
         os.mkdir("./data")
 
     file_header = f"data/{args.model_source}_{args.model.replace("/", "-")}{"_" + args.cot if args.cot is not None else ''}_{args.n_boxes}_"
+    print(f"Saving to: {file_header}")
     
     run_stats = {}
     run_history = {}
