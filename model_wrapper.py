@@ -126,9 +126,9 @@ class ModelWrapper():
             )
             response = response.choices[0].message.content
 
-            if "gpt" in self.model_name:
-                self.history.append({"role": "assistant", "content": response})
-            else:
-                self.history.append({"role": "model", "content": response})
+            # if "gpt" in self.model_name:
+            self.history.append({"role": "assistant", "content": response})
+            # else:
+            #     self.history.append({"role": "model", "content": response})
 
         return response
