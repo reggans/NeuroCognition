@@ -38,6 +38,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
         if cot == "implicit":
             cot_prompt = "Think step-by-step, utilizing information from previous feedbacks, and state your reasoning clearly.\n"
         elif cot == "explicit":
+            cot_prompt = "Think step-by-step, utilizing information from previous feedbacks, and state your reasoning clearly.\n"
             cot_prompt = cot_prompt + "Track the boxes where the tokens have been found before.\n"""
         else:
             raise ValueError("CoT must be None, or either of 'implicit' or 'explicit'.")
@@ -195,7 +196,7 @@ if __name__ == "__main__":
 
     file_header = f"data/{args.model_source}_{args.model.replace("/", "-")}{"_" + args.cot if args.cot is not None else ''}_{args.n_boxes}_"
     print(f"Saving to: {file_header}")
-    
+
     run_stats = {}
     run_history = {}
     for i in range(args.runs):
