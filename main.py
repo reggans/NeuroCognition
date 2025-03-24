@@ -111,6 +111,9 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                 #         if chosen_box not in legal_boxes:    
                 #             illegal_guesses[-1] += 1
 
+                if chosen_box in opened_boxes:
+                    repeated_guesses[-1] += 1
+
                 opened_boxes.append(chosen_box)
 
                 # After first guess, choose a box for the token excluding the chosen box
@@ -131,8 +134,6 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
 
                     if chosen_box not in legal_boxes:
                          illegal_guesses[-1] += 1
-                    if chosen_box in opened_boxes:
-                         repeated_guesses[-1] += 1
                 
             # Save to temp file
             with open("data/temp_history.json", "w") as f:
