@@ -106,7 +106,7 @@ class ModelWrapper():
             used = 0
             for _ in range(10):
                 if self.budget - used <= 0:
-                    full_response += "</think><ANS>"
+                    full_response += "</think>"
                     break
                 
                 text = self.tokenizer.apply_chat_template(
@@ -147,6 +147,8 @@ class ModelWrapper():
                 tokenize=False,
                 continue_final_answer=True,
             )
+            full_response += "<ANS>"
+            text += "<ANS>"
 
             model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
             generated_ids = self.model.generate(
