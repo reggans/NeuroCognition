@@ -106,7 +106,7 @@ class ModelWrapper():
             used = 0
             for _ in range(10):
                 if self.budget - used <= 0:
-                    self.history[-1]['content'] += "</think>"
+                    full_response += "</think>"
                     break
                 
                 text = self.tokenizer.apply_chat_template(
@@ -138,6 +138,8 @@ class ModelWrapper():
                 model_inputs = None 
                 generated_ids = None
                 torch.cuda.empty_cache()
+            
+            self.history[-1]['content'] = full_response
                 
             # Generate final answer
             text = self.tokenizer.apply_chat_template(
