@@ -110,9 +110,9 @@ class ModelWrapper():
                     break
                 
                 text = self.tokenizer.apply_chat_template(
-                self.history,
-                tokenize=False,
-                continue_final_message=True
+                    self.history,
+                    tokenize=False,
+                    continue_final_message=True
                 )
 
                 model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
@@ -143,6 +143,7 @@ class ModelWrapper():
             text = self.tokenizer.apply_chat_template(
                 self.history,
                 tokenize=False,
+                continue_final_answer=True,
             )
 
             model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
@@ -150,7 +151,6 @@ class ModelWrapper():
                 **model_inputs,
                 max_new_tokens=max_new_tokens,
                 do_sample=True,
-                continue_final_message=True,
             )
             generated_ids = [
                 output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
