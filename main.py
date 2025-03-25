@@ -111,6 +111,8 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                 #         if chosen_box not in legal_boxes:    
                 #             illegal_guesses[-1] += 1
 
+                if chosen_box not in legal_boxes:
+                    illegal_guesses[-1] += 1
                 if chosen_box in opened_boxes:
                     repeated_guesses[-1] += 1
 
@@ -131,9 +133,6 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     found = True
                 else:
                     response = model.send_message(f"EMPTY\nBox {chosen_box} is empty.\nTokens found: {i}\n" + question)
-
-                    if chosen_box not in legal_boxes:
-                         illegal_guesses[-1] += 1
                 
             # Save to temp file
             with open("data/temp_history.json", "w") as f:

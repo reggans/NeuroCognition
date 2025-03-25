@@ -7,13 +7,14 @@ import torch
 import os
 
 class ModelWrapper():
-    def __init__(self, model_name, model_source, api_key=None, max_new_tokens=512):
+    def __init__(self, model_name, model_source, api_key=None, max_new_tokens=512, budget=0):
         self.chat = None # Specific to Gemini API, None otherwise
         self.client = None # Specific to LiteLLM API, None otherwise
         self.history = None
         self.model_name = model_name
         self.model_source = model_source
         self.max_new_tokens = max_new_tokens
+        self.budget = budget
 
         # Gemini API
         if model_source == "google":
@@ -89,15 +90,59 @@ class ModelWrapper():
         elif self.model_source == "hf":
             if max_new_tokens is None:
                 max_new_tokens = self.max_new_tokens
+            
+            full_response = ""
                 
             self.history.append(
                 {"role": "user", "content": message}
             )
 
+            # Budget Forcing
+            full_response += "<think>"
+            self.history.append(
+                {"role": "model", "content": full_response}
+            )
+
+            used = 0
+            for _ in range(10):
+                if self.budget - used <= 0:
+                    self.history[-1]['content'] += "</think>"
+                    break
+                
+                text = self.tokenizer.apply_chat_template(
+                self.history,
+                tokenize=False,
+                continue_final_message=True
+                )
+
+                model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
+                generated_ids = self.model.generate(
+                    **model_inputs,
+                    max_new_tokens=self.budget - used,
+                    do_sample=True,
+                )
+                generated_ids = [
+                    output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+                ]
+                response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+
+                # Truncate to before </think>
+                if "</think>" in response:
+                    idx = response.find("</think>")
+                    response = response[:idx]
+                
+                full_response += response
+                self.history[-1]["content"] = full_response
+                used += len(self.tokenizer([response]))
+                
+                model_inputs = None 
+                generated_ids = None
+                torch.cuda.empty_cache()
+                
+            # Generate final answer
             text = self.tokenizer.apply_chat_template(
                 self.history,
                 tokenize=False,
-                add_generation_prompt=True,
             )
 
             model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
@@ -105,12 +150,14 @@ class ModelWrapper():
                 **model_inputs,
                 max_new_tokens=max_new_tokens,
                 do_sample=True,
+                continue_final_message=True,
             )
             generated_ids = [
                 output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
             ]
             response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-            self.history.append({"role": "model", "content": response})
+            full_response += response
+            self.history[-1]["content"] = full_response
             
             model_inputs = None 
             generated_ids = None
