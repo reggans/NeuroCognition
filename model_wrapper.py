@@ -108,6 +108,8 @@ class ModelWrapper():
                 if self.budget - used <= 0:
                     full_response += "</think>"
                     break
+
+                full_response += ". Wait,"
                 
                 text = self.tokenizer.apply_chat_template(
                     self.history,
@@ -160,6 +162,7 @@ class ModelWrapper():
             response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
             full_response += response
             self.history[-1]["content"] = full_response
+            response = full_response
             
             model_inputs = None 
             generated_ids = None
@@ -180,4 +183,4 @@ class ModelWrapper():
             # else:
             #     self.history.append({"role": "model", "content": response})
 
-        return full_response
+        return response

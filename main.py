@@ -55,7 +55,6 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
     repeated_guesses = [] 
 
     # Start the test
-    # Modified: Any chosen box will be empty unless it is the last legal box
     response = model.send_message(question)
     with tqdm(total=2*worst_case_n, desc="Total guesses") as pbar:
         for i in tqdm(range(n_boxes), total=n_boxes, desc="Rounds"):
@@ -94,7 +93,8 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     response = model.send_message(f"Please answer with the specified format\nTokens found: {i}\n" + question)
                     invalid_guesses[-1] += 1
                     continue
-
+                
+                # Modified: Any chosen box will be empty unless it is the last legal box
                 # if chosen_box in opened_boxes:      
                 #     response = model.send_message(f"EMPTY\nBox {chosen_box} is empty.\nTokens found: {i}\n" + question)
                 #     repeated_guesses[-1] += 1
