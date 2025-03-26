@@ -1,10 +1,11 @@
 import google.generativeai as genai
+import google
 import openai
 import transformers
 from huggingface_hub import login
 import torch
 
-import os
+import os, time
 
 class ModelWrapper():
     def __init__(self, model_name, model_source, api_key=None, max_new_tokens=512, budget=0):
@@ -80,7 +81,11 @@ class ModelWrapper():
     
     def send_message(self, message, max_new_tokens=None):
         if self.model_source == "google":
-            response = self.chat.send_message(message).text
+            try:
+                response = self.chat.send_message(message).text
+            except google.api_core.exceptions.ResourceExhausted:
+                time.sleep(60)
+                response = self.chat.send_message(message).text
 
             # Add to history
             self.history.extend([
