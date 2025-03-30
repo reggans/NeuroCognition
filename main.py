@@ -93,7 +93,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     response = model.send_message(f"Please answer with the specified format\nTokens found: {i}\n" + question)
                     invalid_guesses[-1] += 1
                     continue
-                
+
                 # Modified: Any chosen box will be empty unless it is the last legal box
                 # if chosen_box in opened_boxes:      
                 #     response = model.send_message(f"EMPTY\nBox {chosen_box} is empty.\nTokens found: {i}\n" + question)
@@ -163,7 +163,7 @@ def score(run_stats):
     Returns:
         float: The score.
     """
-    return run_stats["total_guesses"] / run_stats["worst_case_guesses"]
+    return 1 - (run_stats['total_illegal'] + run_stats['total_repeated']) / run_stats['total_guesses']
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the SWM problem.")
@@ -223,3 +223,4 @@ if __name__ == "__main__":
     
     for key, value in avg_stats.items():
         print(f"{key}: {value}")
+    print(f'Score: {score(run_stats)}')
