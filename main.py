@@ -223,4 +223,8 @@ if __name__ == "__main__":
     
     for key, value in avg_stats.items():
         print(f"{key}: {value}")
-    print(f'Score: {score(run_stats)}')
+    
+    tot_score = 0
+    for stats in run_stats.values():
+        tot_score += score(stats)
+    print(f'Score: {tot_score / len(run_stats.keys())}')
