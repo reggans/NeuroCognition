@@ -167,7 +167,6 @@ class ModelWrapper():
             response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
             full_response += response
             self.history[-1]["content"] = full_response
-            response = full_response
             
             model_inputs = None 
             generated_ids = None
@@ -177,10 +176,17 @@ class ModelWrapper():
                 {"role": "user", "content": message}
             )
 
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=self.history
-            )
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=self.history
+                )
+            except:
+                time.sleep(60)
+                response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=self.history
+                )
             response = response.choices[0].message.content
 
             # if "gpt" in self.model_name:
