@@ -67,89 +67,89 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
     # Start the test
     response = model.send_message(question)
     with tqdm(total=2*worst_case_n, desc="Total guesses") as guess_bar:
-        with tqdm(total=n_boxes, desc="Token A") as a_bar:
-            with tqdm(total=n_boxes, desc="Token B") as b_bar:
-                while (True):
-                    token_box = [random.choice(legal_boxes[token]) for token in tokens]
-                    opened_boxes = set()
+        with tqdm(total=n_boxes * 2, desc="Token A") as token_bar:
+            while (True):
+                token_box = [random.choice(legal_boxes[token]) for token in tokens]
+                opened_boxes = set()
 
-                    found = False
-                    while not found:
-                        total_guess += 1
-                        guess_bar.update(1)
+                found = False
+                while not found:
+                    total_guess += 1
+                    guess_bar.update(1)
 
-                        with open("data/temp_history.json", "w") as f:
-                            json.dump(model.history, f)
-                        
-                        if total_guess > 2*worst_case_n:
-                            break
-
-                        # Get and validate response
-                        if re.search(r"<ANS>(?s:.*)</ANS>", response) is not None:
-                            chosen_box = re.search(r"<ANS>(?s:.*)</ANS>", response)[0]
-                            chosen_box = re.sub(r"<ANS>|</ANS>", "", chosen_box).strip()
-                            try:
-                                chosen_box = int(chosen_box)
-                            except ValueError:
-                                response = model.send_message(f"Please answer with the specified format\nTokens found: {i}\n" + question)
-                                invalid_guess += 1
-                                continue
-                        else:
-                            response = model.send_message(f"Please answer with the specified format\nTokens found: {i}\n" + question)
-                            invalid_guess += 1
-                            continue
-                        
-                        legal = False
-                        for legal in legal_boxes.values():
-                            if chosen_box in legal:
-                                legal = True
-                                break
-                        if not legal:
-                            illegal_guess += 1
-                        if chosen_box in opened_boxes:
-                            repeated_guess += 1
-
-                        opened_boxes.add(chosen_box)
-
-                        # After first guess, choose a box for the token excluding the chosen box
-                        # if token_box is None and len(set(legal_boxes).intersection(opened_boxes)) == 1:
-                        #     if len(legal_boxes) == 1:
-                        #         token_box = legal_boxes[0]
-                        #     else:
-                        #         legal_boxes.remove(chosen_box)
-                        #         token_box = random.choice(legal_boxes)
-                        #         legal_boxes.append(chosen_box)
-
-                        found_tokens = []
-                        for i in range(n_tokens):
-                            if chosen_box == token_box[i]:
-                                found = True
-                                legal_boxes[token[i]].remove(token_box)
-                                found_tokens.append(token[i])
-                        
-                        msg = ""
-                        if found:
-                            for token in found_tokens:
-                                msg += f"Token {token} found in box {chosen_box}.\n"
-                            
-                            for token in tokens:
-                                msg += f"{token} tokens found: {n_boxes - len(legal_boxes[token])}\n"
-                        else:
-                            msg += f"No tokens found in box {chosen_box}.\n"
-                            for token in tokens:
-                                msg += f"{token} tokens found: {n_boxes - len(legal_boxes[token])}\n"
-
-                        response = model.send_message(msg + question)
-                        
-                    # Save to temp file
                     with open("data/temp_history.json", "w") as f:
                         json.dump(model.history, f)
                     
-                    if all([len(legal) == 0 for legal in legal_boxes.values()]):
-                        break
-
                     if total_guess > 2*worst_case_n:
                         break
+
+                    # Get and validate response
+                    if re.search(r"<ANS>(?s:.*)</ANS>", response) is not None:
+                        chosen_box = re.search(r"<ANS>(?s:.*)</ANS>", response)[0]
+                        chosen_box = re.sub(r"<ANS>|</ANS>", "", chosen_box).strip()
+                        try:
+                            chosen_box = int(chosen_box)
+                        except ValueError:
+                            response = model.send_message(f"Please answer with the specified format\nTokens found: {i}\n" + question)
+                            invalid_guess += 1
+                            continue
+                    else:
+                        response = model.send_message(f"Please answer with the specified format\nTokens found: {i}\n" + question)
+                        invalid_guess += 1
+                        continue
+                    
+                    legal = False
+                    for legal in legal_boxes.values():
+                        if chosen_box in legal:
+                            legal = True
+                            break
+                    if not legal:
+                        illegal_guess += 1
+                    if chosen_box in opened_boxes:
+                        repeated_guess += 1
+
+                    opened_boxes.add(chosen_box)
+
+                    # After first guess, choose a box for the token excluding the chosen box
+                    # if token_box is None and len(set(legal_boxes).intersection(opened_boxes)) == 1:
+                    #     if len(legal_boxes) == 1:
+                    #         token_box = legal_boxes[0]
+                    #     else:
+                    #         legal_boxes.remove(chosen_box)
+                    #         token_box = random.choice(legal_boxes)
+                    #         legal_boxes.append(chosen_box)
+
+                    found_tokens = []
+                    for i in range(n_tokens):
+                        if chosen_box == token_box[i]:
+                            found = True
+                            token_bar.update(1)
+                            legal_boxes[token[i]].remove(token_box)
+                            found_tokens.append(token[i])
+                    
+                    msg = ""
+                    if found:
+                        for token in found_tokens:
+                            msg += f"Token {token} found in box {chosen_box}.\n"
+                        
+                        for token in tokens:
+                            msg += f"{token} tokens found: {n_boxes - len(legal_boxes[token])}\n"
+                    else:
+                        msg += f"No tokens found in box {chosen_box}.\n"
+                        for token in tokens:
+                            msg += f"{token} tokens found: {n_boxes - len(legal_boxes[token])}\n"
+
+                    response = model.send_message(msg + question)
+                    
+                # Save to temp file
+                with open("data/temp_history.json", "w") as f:
+                    json.dump(model.history, f)
+                
+                if all([len(legal) == 0 for legal in legal_boxes.values()]):
+                    break
+
+                if total_guess > 2*worst_case_n:
+                    break
     
     run_stats = {
         "worst_case_guesses": worst_case_n,
