@@ -118,7 +118,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     #         legal_boxes.remove(chosen_box)
                     #         token_box = random.choice(legal_boxes)
                     #         legal_boxes.append(chosen_box)
-
+                    print(legal_boxes)
                     found_tokens = []
                     for i in range(n_tokens):
                         if chosen_box == token_box[i]:
@@ -126,8 +126,6 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                             token_bar.update(1)
                             legal_boxes[token[i]].remove(token_box)
                             found_tokens.append(token[i])
-
-                            print(legal_boxes)
                     
                     msg = ""
                     if found:
