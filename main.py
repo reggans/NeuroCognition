@@ -176,6 +176,7 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, default=None, help="The model to use.")
     parser.add_argument("--model_source", type=str, default="hf", help="The source of the model.")
     parser.add_argument("--n_boxes", type=int, default=6, help="The number of boxes in the test. More == harder.")
+    parser.add_argument("--n_tokens", type=int, default=1, help="The number of different tokens present at the same time. More == harder")
     parser.add_argument("--cot", type=str, default=None, help="The type of CoT to use.")
     parser.add_argument("--runs", type=int, default=1, help="The number of runs to perform.")
     parser.add_argument("--max_tokens", type=int, default=512, help="The maximum number of tokens to generate.")
@@ -200,7 +201,7 @@ if __name__ == "__main__":
     if not os.path.isdir("./data"):
         os.mkdir("./data")
 
-    file_header = f"data/{args.model_source}_{args.model.replace('/', '-')}{'_' + args.cot if args.cot is not None else ''}_{args.n_boxes}_"
+    file_header = f"data/{args.model_source}_{args.model.replace('/', '-')}{'_' + args.cot if args.cot is not None else ''}_{args.n_boxes}_{args.n_tokens}_"
     print(f"Saving to: {file_header}")
 
     run_stats = {}
@@ -212,7 +213,7 @@ if __name__ == "__main__":
         model = ModelWrapper(args.model, args.model_source, api_key=args.api_key, max_new_tokens=args.max_tokens)
 
         print(f"Run {i+1}/{args.runs}")
-        run_stats[f"run_{i+1}"] = run_swm(model, args.n_boxes, cot=args.cot)
+        run_stats[f"run_{i+1}"] = run_swm(model, args.n_boxes, n_tokens=args.n_tokens, cot=args.cot)
         run_history[f"run_{i+1}"] = model.history
 
         with open(file_header + "run_stats.json", "w") as f:
