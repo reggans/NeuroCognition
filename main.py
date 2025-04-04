@@ -23,13 +23,13 @@ def run_swm(model, n_boxes, n_tokens=1, cot=None):
     """
     # Initiate w/ task prompt
     task_prompt = f"""You will be performing a text version of the Spatial Working Memory (SWM) test.
-There are {n_boxes} boxes, one of which contains a token.
-Your goal is to find {n_boxes} tokens by repeatedly selecting a box to open.
-If the box contains a token, I will respond with "TOKEN".
-If the box is empty, I will respond with "EMPTY".
-Once the token is found, the token will be regenerated in another box.
-The token will be generated in a box that has never contained a token before in the trial.
-The token may be generated in a box that has been opened and found empty before, as long as it never contained the token previously.
+There are {n_tokens} types of tokens, hidden in any one of {n_boxes} boxes.
+Your goal is to find the {n_tokens} types of tokens {n_boxes} times each, by repeatedly selecting a box to open.
+If the box contains a token, you will be informed which token type it is.
+If the box does not contain a token, you will be informed that it is empty.
+Once the token is found, another token of the same type will be regenerated in another box.
+The token will be generated in a box that has never contained a token of that type before in the trial.
+The token may be generated in a box that has been opened and found empty before, as long as it never contained the token of that type previously.
 Your final answer should be a number from 1-{n_boxes}, the index of the box you selected.
 """
     model.init_chat(task_prompt)
@@ -68,10 +68,16 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
     response = model.send_message(question)
     with tqdm(total=2*worst_case_n, desc="Total guesses") as guess_bar:
         with tqdm(total=n_boxes * 2, desc="Tokens") as token_bar:
+            token_box = dict.fromkeys(tokens)
+            for token in tokens:
+                token_box[token] = random.choice(legal_boxes[token])
+
             while (True):
-                token_box = [random.choice(legal_boxes[token]) for token in tokens]
+                for token in found_tokens:
+                    token_box[token] = random.choice(legal_boxes[token])
                 opened_boxes = set()
 
+                found_tokens = []
                 found = False
                 while not found:
                     total_guess += 1
@@ -119,13 +125,12 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     #         token_box = random.choice(legal_boxes)
                     #         legal_boxes.append(chosen_box)
                     
-                    found_tokens = []
-                    for i in range(n_tokens):
-                        if chosen_box == token_box[i]:
+                    for token in tokens:
+                        if chosen_box == token_box[token]:
                             found = True
                             token_bar.update(1)
-                            legal_boxes[token[i]].remove(chosen_box)
-                            found_tokens.append(token[i])
+                            legal_boxes[tokens[i]].remove(chosen_box)
+                            found_tokens.append(tokens[i])
                     
                     msg = ""
                     if found:
