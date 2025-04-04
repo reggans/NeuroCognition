@@ -6,10 +6,11 @@ import numpy as np
 from tqdm.auto import tqdm
 
 import random, json, re, argparse, os
+import string
 
 from model_wrapper import ModelWrapper
 
-def run_swm(model, n_boxes, cot=None):
+def run_swm(model, n_boxes, n_tokens=1, cot=None):
     """
     Run the Spatial Working Memory (SWM) test with the given model.
     Args:
@@ -47,110 +48,115 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
         question = f"Answer concisely. Which of the {n_boxes} boxes would you like to open?\nState your final answer by wrapping it with <ANS> and </ANS>"
 
     # Initialize run statistics & variables
-    legal_boxes = [x for x in range(1, n_boxes+1)]
-    worst_case_n = sum(legal_boxes)
-    n_guesses = []
-    illegal_guesses = []
-    invalid_guesses = []
-    repeated_guesses = [] 
+    tokens = [string.ascii_uppercase[x] for x in range(n_tokens)]
+    legal_boxes = dict.fromkeys(tokens)
+    for token in tokens:
+        legal_boxes[token] = [x for x in range(n_boxes)]
+
+    worst_case_n = sum(legal_boxes[token[0]]) * 2
+    # n_guesses = []
+    # illegal_guesses = []
+    # invalid_guesses = []
+    # repeated_guesses = []
+
+    total_guess = 0
+    illegal_guess = 0
+    invalid_guess = 0
+    repeated_guess = 0
 
     # Start the test
     response = model.send_message(question)
-    with tqdm(total=2*worst_case_n, desc="Total guesses") as pbar:
-        for i in tqdm(range(n_boxes), total=n_boxes, desc="Rounds"):
-            n_guesses.append(0)
-            illegal_guesses.append(0)
-            invalid_guesses.append(0)
-            repeated_guesses.append(0)
-            token_box = None
+    with tqdm(total=2*worst_case_n, desc="Total guesses") as guess_bar:
+        with tqdm(total=n_boxes, desc="Token A") as a_bar:
+            with tqdm(total=n_boxes, desc="Token B") as b_bar:
+                while (True):
+                    token_box = [random.choice(legal_boxes[token]) for token in tokens]
+                    opened_boxes = set()
 
-            # Track opened boxes in this trial
-            opened_boxes = []
+                    found = False
+                    while not found:
+                        total_guess += 1
+                        guess_bar.update(1)
 
-            found = False
-            while not found:
-                n_guesses[-1] += 1
-                pbar.update(1)
+                        with open("data/temp_history.json", "w") as f:
+                            json.dump(model.history, f)
+                        
+                        if total_guess > 2*worst_case_n:
+                            break
 
-                # Save to temp file
-                with open("data/temp_history.json", "w") as f:
-                    json.dump(model.history, f)
+                        # Get and validate response
+                        if re.search(r"<ANS>(?s:.*)</ANS>", response) is not None:
+                            chosen_box = re.search(r"<ANS>(?s:.*)</ANS>", response)[0]
+                            chosen_box = re.sub(r"<ANS>|</ANS>", "", chosen_box).strip()
+                            try:
+                                chosen_box = int(chosen_box)
+                            except ValueError:
+                                response = model.send_message(f"Please answer with the specified format\nTokens found: {i}\n" + question)
+                                invalid_guess += 1
+                                continue
+                        else:
+                            response = model.send_message(f"Please answer with the specified format\nTokens found: {i}\n" + question)
+                            invalid_guess += 1
+                            continue
+                        
+                        legal = False
+                        for legal in legal_boxes.values():
+                            if chosen_box in legal:
+                                legal = True
+                                break
+                        if not legal:
+                            illegal_guess += 1
+                        if chosen_box in opened_boxes:
+                            repeated_guess += 1
 
-                if sum(n_guesses) > 2*worst_case_n:
-                    break
-                
-                # Get and validate response
-                if re.search(r"<ANS>(?s:.*)</ANS>", response) is not None:
-                    chosen_box = re.search(r"<ANS>(?s:.*)</ANS>", response)[0]
-                    chosen_box = re.sub(r"<ANS>|</ANS>", "", chosen_box).strip()
-                    try:
-                        chosen_box = int(chosen_box)
-                    except ValueError:
-                        response = model.send_message(f"Please answer with the specified format\nTokens found: {i}\n" + question)
-                        invalid_guesses[-1] += 1
-                        continue
-                else:
-                    response = model.send_message(f"Please answer with the specified format\nTokens found: {i}\n" + question)
-                    invalid_guesses[-1] += 1
-                    continue
+                        opened_boxes.add(chosen_box)
 
-                # Modified: Any chosen box will be empty unless it is the last legal box
-                # if chosen_box in opened_boxes:      
-                #     response = model.send_message(f"EMPTY\nBox {chosen_box} is empty.\nTokens found: {i}\n" + question)
-                #     repeated_guesses[-1] += 1
-                # else:              
-                #     opened_boxes.append(chosen_box)
+                        # After first guess, choose a box for the token excluding the chosen box
+                        # if token_box is None and len(set(legal_boxes).intersection(opened_boxes)) == 1:
+                        #     if len(legal_boxes) == 1:
+                        #         token_box = legal_boxes[0]
+                        #     else:
+                        #         legal_boxes.remove(chosen_box)
+                        #         token_box = random.choice(legal_boxes)
+                        #         legal_boxes.append(chosen_box)
+
+                        found_tokens = []
+                        for i in range(n_tokens):
+                            if chosen_box == token_box[i]:
+                                found = True
+                                legal_boxes[token[i]].remove(token_box)
+                                found_tokens.append(token[i])
+                        
+                        msg = ""
+                        if found:
+                            for token in found_tokens:
+                                msg += f"Token {token} found in box {chosen_box}.\n"
+                            
+                            for token in tokens:
+                                msg += f"{token} tokens found: {n_boxes - len(legal_boxes[token])}\n"
+                        else:
+                            msg += f"No tokens found in box {chosen_box}.\n"
+                            for token in tokens:
+                                msg += f"{token} tokens found: {n_boxes - len(legal_boxes[token])}\n"
+
+                        response = model.send_message(msg + question)
+                        
+                    # Save to temp file
+                    with open("data/temp_history.json", "w") as f:
+                        json.dump(model.history, f)
                     
-                #     if len(legal_boxes.intersection(opened_boxes)) == len(legal_boxes):
-                #         if i < n_boxes-1:
-                #             response = model.send_message(f"TOKEN\nBox {chosen_box} contains a token.\nTokens found: {i+1}\n" + question)
-                #         found = True
-                #         legal_boxes.remove(chosen_box)
-                #     else:
-                #         response = model.send_message(f"EMPTY\nBox {chosen_box} is empty.\nTokens found: {i}\n" + question)
-                #         if chosen_box not in legal_boxes:    
-                #             illegal_guesses[-1] += 1
+                    if all([len(legal) == 0 for legal in legal_boxes.values()]):
+                        break
 
-                if chosen_box not in legal_boxes:
-                    illegal_guesses[-1] += 1
-                if chosen_box in opened_boxes:
-                    repeated_guesses[-1] += 1
-
-                opened_boxes.append(chosen_box)
-
-                # After first guess, choose a box for the token excluding the chosen box
-                if token_box is None and len(set(legal_boxes).intersection(opened_boxes)) == 1:
-                    if len(legal_boxes) == 1:
-                        token_box = legal_boxes[0]
-                    else:
-                        legal_boxes.remove(chosen_box)
-                        token_box = random.choice(legal_boxes)
-                        legal_boxes.append(chosen_box)
-
-                if chosen_box == token_box:
-                    response = model.send_message(f"TOKEN\nBox {chosen_box} contains a token.\nTokens found: {i+1}\n" + question)
-                    legal_boxes.remove(token_box)
-                    found = True
-                else:
-                    response = model.send_message(f"EMPTY\nBox {chosen_box} is empty.\nTokens found: {i}\n" + question)
-                
-            # Save to temp file
-            with open("data/temp_history.json", "w") as f:
-                json.dump(model.history, f)
-            
-            if sum(n_guesses) > 2*worst_case_n:
-                break
+                    if total_guess > 2*worst_case_n:
+                        break
     
     run_stats = {
-        "total_guesses": sum(n_guesses),
-        "total_illegal": sum(illegal_guesses),
-        "total_invalid": sum(invalid_guesses),
-        "total_repeated": sum(repeated_guesses),
         "worst_case_guesses": worst_case_n,
-        "illegal": illegal_guesses,
-        "guesses": n_guesses,
-        "invalid": invalid_guesses,
-        "repeated": repeated_guesses
+        "illegal": illegal_guess,
+        "guesses": total_guess,
+        "invalid": invalid_guess,
+        "repeated": repeated_guess,
     }
 
     return run_stats
@@ -194,7 +200,7 @@ if __name__ == "__main__":
     if not os.path.isdir("./data"):
         os.mkdir("./data")
 
-    file_header = f"data/{args.model_source}_{args.model.replace("/", "-")}{"_" + args.cot if args.cot is not None else ''}_{args.n_boxes}_"
+    file_header = f"data/{args.model_source}_{args.model.replace('/', '-')}{'_' + args.cot if args.cot is not None else ''}_{args.n_boxes}_"
     print(f"Saving to: {file_header}")
 
     run_stats = {}
