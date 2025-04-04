@@ -54,11 +54,6 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
         legal_boxes[token] = [x for x in range(n_boxes)]
 
     worst_case_n = sum(legal_boxes[token[0]]) * 2
-    # n_guesses = []
-    # illegal_guesses = []
-    # invalid_guesses = []
-    # repeated_guesses = []
-
     total_guess = 0
     illegal_guess = 0
     invalid_guess = 0
@@ -71,7 +66,8 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
             token_box = dict.fromkeys(tokens)
             for token in tokens:
                 token_box[token] = random.choice(legal_boxes[token])
-
+            found_tokens = []
+            
             while (True):
                 for token in found_tokens:
                     token_box[token] = random.choice(legal_boxes[token])
