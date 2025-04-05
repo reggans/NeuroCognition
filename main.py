@@ -53,7 +53,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
     for token in tokens:
         legal_boxes[token] = [x for x in range(1, n_boxes+1)]
 
-    worst_case_n = sum(legal_boxes[token[0]]) * 2
+    worst_case_n = n_boxes ** 2
     total_guess = 0
     illegal_guess = 0
     invalid_guess = 0
@@ -61,7 +61,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
 
     # Start the test
     response = model.send_message(question)
-    with tqdm(total=2*worst_case_n, desc="Total guesses") as guess_bar:
+    with tqdm(total=worst_case_n, desc="Total guesses") as guess_bar:
         with tqdm(total=n_boxes * 2, desc="Tokens") as token_bar:
             token_box = dict.fromkeys(tokens)
             for token in tokens:
@@ -83,7 +83,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                 # End test
                 if all([len(legal) == 0 for legal in legal_boxes.values()]):
                     break
-                if total_guess >= 2*worst_case_n:
+                if total_guess >= worst_case_n:
                     break
                 
                 opened_boxes = set()
@@ -96,7 +96,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     with open("data/temp_history.json", "w") as f:
                         json.dump(model.history, f)
                     
-                    if total_guess >= 2*worst_case_n:
+                    if total_guess >= worst_case_n:
                         break
 
                     # Get and validate response
