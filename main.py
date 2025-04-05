@@ -74,7 +74,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     if len(legal_boxes[token]) == 0:
                         continue
                     token_box[token] = random.choice(legal_boxes[token])
-                    tqdm.write(f"Token {token} put in box {token_box[token]}")
+                    # tqdm.write(f"Token {token} put in box {token_box[token]}")
 
                 # Save to temp file
                 with open("data/temp_history.json", "w") as f:
@@ -142,7 +142,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                             token_bar.update(1)
                             legal_boxes[token].remove(chosen_box)
                             found_tokens.append(token)
-                            tqdm.write(f"Token {token}: {legal_boxes[token]}")
+                            # tqdm.write(f"Token {token}: {legal_boxes[token]}")
                     
                     msg = ""
                     if found:
@@ -176,7 +176,7 @@ def score(run_stats):
     Returns:
         float: The score.
     """
-    return 1 - (run_stats['illegal'] + run_stats['repeated']) / run_stats['guesses']
+    return 1 - (run_stats['illegal'] + run_stats['repeated']) / (run_stats['guesses'] - run_stats['invalid'])
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the SWM problem.")
