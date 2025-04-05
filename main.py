@@ -72,8 +72,18 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                 for token in found_tokens:
                     token_box[token] = random.choice(legal_boxes[token])
                     tqdm.write(f"Token {token} put in box {token_box[token]}")
-                opened_boxes = set()
 
+                # Save to temp file
+                with open("data/temp_history.json", "w") as f:
+                    json.dump(model.history, f)
+                
+                # End test
+                if all([len(legal) == 0 for legal in legal_boxes.values()]):
+                    break
+                if total_guess > 2*worst_case_n:
+                    break
+                
+                opened_boxes = set()
                 found_tokens = []
                 found = False
                 while not found:
@@ -127,7 +137,6 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                             found = True
                             token_bar.update(1)
                             legal_boxes[token].remove(chosen_box)
-                            opened_boxes = set()
                             found_tokens.append(token)
                             tqdm.write(f"Token {token}: {legal_boxes[token]}")
                     
@@ -144,16 +153,6 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                             msg += f"{token} tokens found: {n_boxes - len(legal_boxes[token])}\n"
 
                     response = model.send_message(msg + question)
-                    
-                # Save to temp file
-                with open("data/temp_history.json", "w") as f:
-                    json.dump(model.history, f)
-                
-                if all([len(legal) == 0 for legal in legal_boxes.values()]):
-                    break
-
-                if total_guess > 2*worst_case_n:
-                    break
     
     run_stats = {
         "worst_case_guesses": worst_case_n,
