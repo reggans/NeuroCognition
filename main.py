@@ -71,6 +71,8 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
 
             while (True):
                 for token in found_tokens:
+                    if len(legal_boxes[token]) == 0:
+                        continue
                     token_box[token] = random.choice(legal_boxes[token])
                     tqdm.write(f"Token {token} put in box {token_box[token]}")
 
