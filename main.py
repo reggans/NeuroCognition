@@ -138,6 +138,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     for token in tokens:
                         if chosen_box == token_box[token]:
                             found = True
+                            token_box[token] = -1
                             token_bar.update(1)
                             legal_boxes[token].remove(chosen_box)
                             found_tokens.append(token)
