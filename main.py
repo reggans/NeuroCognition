@@ -80,7 +80,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                 # End test
                 if all([len(legal) == 0 for legal in legal_boxes.values()]):
                     break
-                if total_guess > 2*worst_case_n:
+                if total_guess >= 2*worst_case_n:
                     break
                 
                 opened_boxes = set()
@@ -93,7 +93,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     with open("data/temp_history.json", "w") as f:
                         json.dump(model.history, f)
                     
-                    if total_guess > 2*worst_case_n:
+                    if total_guess >= 2*worst_case_n:
                         break
 
                     # Get and validate response
