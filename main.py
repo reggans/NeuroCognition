@@ -108,7 +108,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                             break
                     if not legal:
                         illegal_guess += 1
-                    if chosen_box in opened_boxes:
+                    elif chosen_box in opened_boxes:
                         repeated_guess += 1
 
                     opened_boxes.add(chosen_box)
