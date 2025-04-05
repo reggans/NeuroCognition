@@ -51,7 +51,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
     tokens = [string.ascii_uppercase[x] for x in range(n_tokens)]
     legal_boxes = dict.fromkeys(tokens)
     for token in tokens:
-        legal_boxes[token] = [x for x in range(n_boxes)]
+        legal_boxes[token] = [x for x in range(1, n_boxes+1)]
 
     worst_case_n = sum(legal_boxes[token[0]]) * 2
     total_guess = 0
