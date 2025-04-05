@@ -71,6 +71,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
             while (True):
                 for token in found_tokens:
                     token_box[token] = random.choice(legal_boxes[token])
+                    tqdm.write(f"Token {token} put in box {token_box[token]}")
                 opened_boxes = set()
 
                 found_tokens = []
@@ -127,7 +128,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                             token_bar.update(1)
                             legal_boxes[tokens[i]].remove(chosen_box)
                             found_tokens.append(tokens[i])
-                            print(f"Token {token[i]}: {legal_boxes[token[i]]}")
+                            tqdm.write(f"Token {token[i]}: {legal_boxes[token[i]]}")
                     
                     msg = ""
                     if found:
