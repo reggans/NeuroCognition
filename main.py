@@ -172,7 +172,7 @@ def score(run_stats):
     Returns:
         float: The score.
     """
-    return 1 - (run_stats['total_illegal'] + run_stats['total_repeated']) / run_stats['total_guesses']
+    return 1 - (run_stats['illegal'] + run_stats['repeated']) / run_stats['guesses']
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the SWM problem.")
