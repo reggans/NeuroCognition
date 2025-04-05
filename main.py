@@ -127,6 +127,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                             found = True
                             token_bar.update(1)
                             legal_boxes[token].remove(chosen_box)
+                            opened_boxes = set()
                             found_tokens.append(token)
                             tqdm.write(f"Token {token}: {legal_boxes[token]}")
                     
