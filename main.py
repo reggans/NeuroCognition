@@ -185,6 +185,7 @@ if __name__ == "__main__":
     parser.add_argument("--n_boxes", type=int, default=6, help="The number of boxes in the test. More == harder.")
     parser.add_argument("--n_tokens", type=int, default=1, help="The number of different tokens present at the same time. More == harder")
     parser.add_argument("--cot", type=str, default=None, help="The type of CoT to use.")
+    parser.add_argument("--budget", type=int, default=1024, help="Thinking token budget.")
     parser.add_argument("--runs", type=int, default=1, help="The number of runs to perform.")
     parser.add_argument("--max_tokens", type=int, default=512, help="The maximum number of tokens to generate.")
     # parser.add_argument("--seed", type=int, default=42, help="The random seed.")
@@ -217,7 +218,10 @@ if __name__ == "__main__":
         model = None
         torch.cuda.empty_cache()
         
-        model = ModelWrapper(args.model, args.model_source, api_key=args.api_key, max_new_tokens=args.max_tokens)
+        if args.cot is None:
+            model = ModelWrapper(args.model, args.model_source, api_key=args.api_key, max_new_tokens=args.max_tokens, budget=0)
+        else:
+            model = ModelWrapper(args.model, args.model_source, api_key=args.api_key, max_new_tokens=args.max_tokens, budget=args.budget)
 
         print(f"Run {i+1}/{args.runs}")
         run_stats[f"run_{i+1}"] = run_swm(model, args.n_boxes, n_tokens=args.n_tokens, cot=args.cot)
