@@ -116,6 +116,7 @@ class ModelWrapper():
                 
                 if i > 0:
                     full_response += ". Wait,"
+                    self.history[-1]["content"] = full_response
                 
                 text = self.tokenizer.apply_chat_template(
                     self.history,
