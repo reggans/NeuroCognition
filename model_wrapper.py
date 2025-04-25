@@ -118,6 +118,8 @@ class ModelWrapper():
                     full_response += ". Wait,"
                     self.history[-1]["content"] = full_response
                 
+                print(self.history[-1]["content"])
+                
                 text = self.tokenizer.apply_chat_template(
                     self.history,
                     tokenize=False,
