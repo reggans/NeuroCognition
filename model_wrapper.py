@@ -109,12 +109,13 @@ class ModelWrapper():
             )
 
             used = 0
-            for _ in range(10):
+            for i in range(10):
                 if self.budget - used <= 0:
                     full_response += "</think>"
                     break
-
-                full_response += ". Wait,"
+                
+                if i > 0:
+                    full_response += ". Wait,"
                 
                 text = self.tokenizer.apply_chat_template(
                     self.history,
