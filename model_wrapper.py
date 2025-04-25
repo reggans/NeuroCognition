@@ -103,7 +103,7 @@ class ModelWrapper():
             )
 
             # Budget Forcing
-            full_response += "<think>"
+            full_response += "<think> "
             self.history.append(
                 {"role": "model", "content": full_response}
             )
