@@ -103,60 +103,59 @@ class ModelWrapper():
             )
 
             # Budget Forcing
-            full_response += "<think> "
-            self.history.append(
-                {"role": "model", "content": full_response}
-            )
+            # full_response += "<think>"
+            # self.history.append(
+            #     {"role": "model", "content": full_response}
+            # )
 
-            used = 0
-            for i in range(10):
-                if self.budget - used <= 0:
-                    full_response += "</think>"
-                    break
+            # used = 0
+            # for i in range(3):
+            #     if self.budget - used <= 0:
+            #         full_response += "</think>"
+            #         break
                 
-                if i > 0:
-                    full_response += ". Wait,"
-                    self.history[-1]["content"] = full_response
+            #     if i > 0:
+            #         full_response += ". Wait,"
+            #         self.history[-1]["content"] = full_response
                 
-                print(self.history[-1]["content"])
+            #     print(self.history[-1]["content"])
                 
-                text = self.tokenizer.apply_chat_template(
-                    self.history,
-                    tokenize=False,
-                    continue_final_message=True
-                )
+            #     text = self.tokenizer.apply_chat_template(
+            #         self.history,
+            #         tokenize=False,
+            #         continue_final_message=True
+            #     )
 
-                model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
-                generated_ids = self.model.generate(
-                    **model_inputs,
-                    max_new_tokens=self.budget - used,
-                    do_sample=True,
-                )
-                generated_ids = [
-                    output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-                ]
-                response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+            #     model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
+            #     generated_ids = self.model.generate(
+            #         **model_inputs,
+            #         max_new_tokens=self.budget - used,
+            #         do_sample=True,
+            #     )
+            #     generated_ids = [
+            #         output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+            #     ]
+            #     response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
 
-                # Truncate to before </think>
-                if "</think>" in response:
-                    idx = response.find("</think>")
-                    response = response[:idx]
+            #     # Truncate to before </think>
+            #     if "</think>" in response:
+            #         idx = response.find("</think>")
+            #         response = response[:idx]
                 
-                full_response += response
-                self.history[-1]["content"] = full_response
-                used += len(self.tokenizer([response]))
+            #     full_response += response
+            #     self.history[-1]["content"] = full_response
+            #     used += len(self.tokenizer([response]))
                 
-                model_inputs = None 
-                generated_ids = None
-                torch.cuda.empty_cache()
+            #     model_inputs = None 
+            #     generated_ids = None
+            #     torch.cuda.empty_cache()
             
-            self.history[-1]['content'] = full_response
+            # self.history[-1]['content'] = full_response
                 
             # Generate final answer
             text = self.tokenizer.apply_chat_template(
                 self.history,
                 tokenize=False,
-                continue_final_answer=True,
             )
 
             model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
