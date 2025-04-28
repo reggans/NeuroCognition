@@ -45,7 +45,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
             raise ValueError("CoT must be None, or either of 'implicit' or 'explicit'.")
         question = f"Answer concisely. {cot_prompt}Which of the {n_boxes} boxes would you like to open?\nState your final answer by wrapping it with <ANS> and </ANS>"
     else:
-        question = f"Answer concisely. Which of the {n_boxes} boxes would you like to open?\nState your final answer by wrapping it with <ANS> and </ANS>"
+        question = f"Answer immediately with your final answer. Which of the {n_boxes} boxes would you like to open?\nState your final answer by wrapping it with <ANS> and </ANS>"
 
     # Initialize run statistics & variables
     tokens = [string.ascii_uppercase[x] for x in range(n_tokens)]
