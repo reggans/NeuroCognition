@@ -96,7 +96,7 @@ class ModelWrapper():
             if max_new_tokens is None:
                 max_new_tokens = self.max_new_tokens
             
-            full_response = ""
+            # full_response = ""
                 
             self.history.append(
                 {"role": "user", "content": message}
@@ -168,8 +168,11 @@ class ModelWrapper():
                 output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
             ]
             response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-            full_response += response
-            self.history[-1]["content"] = full_response
+            # full_response += response
+
+            self.history.append(
+                {"role": "model", "content": response}
+            )
             
             model_inputs = None 
             generated_ids = None
