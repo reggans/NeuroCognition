@@ -62,7 +62,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
     # Start the test
     response = model.send_message(question)
     with tqdm(total=worst_case_n, desc="Total guesses") as guess_bar:
-        with tqdm(total=n_boxes * 2, desc="Tokens") as token_bar:
+        with tqdm(total=n_boxes * n_tokens, desc="Tokens") as token_bar:
             token_box = dict.fromkeys(tokens)
             for token in tokens:
                 token_box[token] = random.choice(legal_boxes[token])
