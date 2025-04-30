@@ -25,21 +25,21 @@ ENV PATH=/opt/conda/bin:$PATH
 ENV DEBIAN_FRONTEND=noninteractive
 
 # setup conda virtual environment
-# COPY ./environment.yml /tmp/environment.yml
-# RUN conda update conda \
-#     && conda env create --name swm --file /tmp/environment.yml
+COPY ./environment.yml /tmp/environment.yml
+RUN conda update conda \
+    && conda env create --name swm --file /tmp/environment.yml
 # install pytorch inside conda environment
-# RUN conda init
-# SHELL ["bash", "-lc"]
-# RUN conda activate swm && pip3 install torch torchvision torchaudio -f https://download.pytorch.org/whl/cu121/torch_stable.html
+RUN conda init
+SHELL ["bash", "-lc"]
+RUN conda activate swm && pip3 install torch torchvision torchaudio -f https://download.pytorch.org/whl/cu121/torch_stable.html
 
 # # setup conda environment variable
-# RUN echo "conda activate swm" >> ~/.bashrc
-# ENV PATH=/opt/conda/envs/swm/bin:$PATH
-# ENV CONDA_DEFAULT_ENV=$swm
-
-# Set the working directory
-WORKDIR /app
+RUN echo "conda activate swm" >> ~/.bashrc
+ENV PATH=/opt/conda/envs/swm/bin:$PATH
+ENV CONDA_DEFAULT_ENV=$swm
 
 # Clone the repo
 RUN git clone https://github.com/reggans/SWM
+
+# Set the working directory
+WORKDIR /app/SWM
