@@ -10,7 +10,7 @@ do
         # # python main.py --model anthropic/claude-3-5-haiku-latest --model_source litellm --runs 5 --n_boxes $box --n_tokens $token
 
         # python main.py --model unsloth/DeepSeek-R1-Distill-Llama-8B-unsloth-bnb-4bit --model_source hf --max_tokens 2048 --runs 5 --n_boxes $box --n_tokens $token
-        python main.py --model unsloth/QwQ-32B-unsloth-bnb-4bit --model_source hf --max_tokens 2048 --runs 5 --n_boxes $box --n_tokens $token
+        python main.py --model unsloth/QwQ-32B-unsloth-bnb-4bit --model_source hf --max_tokens 2048 --runs 3 --n_boxes $box --n_tokens $token
 
         # python main.py --model gpt-4.5-preview-2025-02-27 --model_source litellm --runs 5 --n_boxes $box --cot implicit --n_tokens $token
         # # python main.py --model gpt-4o-mini-2024-07-18 --model_source litellm --runs 5 --n_boxes $box --cot implicit --n_tokens $token
@@ -20,7 +20,7 @@ do
         # # python main.py --model anthropic/claude-3-5-haiku-latest --model_source litellm --runs 5 --n_boxes $box --cot implicit --n_tokens $token
 
         # python main.py --model unsloth/DeepSeek-R1-Distill-Llama-8B-unsloth-bnb-4bit --model_source hf --max_tokens 2048 --runs 5 --n_boxes $box --n_tokens $token --cot implicit
-        python main.py --model unsloth/QwQ-32B-unsloth-bnb-4bit --model_source hf --max_tokens 2048 --runs 5 --n_boxes $box --n_tokens $token --cot implicit
+        python main.py --model unsloth/QwQ-32B-unsloth-bnb-4bit --model_source hf --max_tokens 2048 --runs 3 --n_boxes $box --n_tokens $token --cot implicit
 
         # python main.py --model gpt-4.5-preview-2025-02-27 --model_source litellm --runs 5 --n_boxes $box --cot explicit --n_tokens $token
         # # python main.py --model gpt-4o-mini-2024-07-18 --model_source litellm --runs 5 --n_boxes $box --cot explicit --n_tokens $token
@@ -30,6 +30,6 @@ do
         # # python main.py --model anthropic/claude-3-5-haiku-latest --model_source litellm --runs 5 --n_boxes $box --cot explicit --n_tokens $token
 
         # python main.py --model unsloth/DeepSeek-R1-Distill-Llama-8B-unsloth-bnb-4bit --model_source hf --max_tokens 2048 --runs 5 --n_boxes $box --n_tokens $token --cot explicit
-        python main.py --model unsloth/QwQ-32B-unsloth-bnb-4bit --model_source hf --max_tokens 2048 --runs 5 --n_boxes $box --n_tokens $token --cot explicit
+        python main.py --model unsloth/QwQ-32B-unsloth-bnb-4bit --model_source hf --max_tokens 2048 --runs 3 --n_boxes $box --n_tokens $token --cot explicit
     done
 done
