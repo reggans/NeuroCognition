@@ -5,7 +5,7 @@ import transformers
 from huggingface_hub import login
 import torch
 
-import os, time
+import os, time, re
 
 class ModelWrapper():
     def __init__(self, model_name, model_source, api_key=None, max_new_tokens=512, budget=0):
@@ -95,84 +95,36 @@ class ModelWrapper():
         elif self.model_source == "hf":
             if max_new_tokens is None:
                 max_new_tokens = self.max_new_tokens
-            
-            # full_response = ""
                 
             self.history.append(
                 {"role": "user", "content": message}
             )
-
-            # Budget Forcing
-            # full_response += "<think>"
-            # self.history.append(
-            #     {"role": "model", "content": full_response}
-            # )
-
-            # used = 0
-            # for i in range(3):
-            #     if self.budget - used <= 0:
-            #         full_response += "</think>"
-            #         break
-                
-            #     if i > 0:
-            #         full_response += ". Wait,"
-            #         self.history[-1]["content"] = full_response
-                
-            #     print(self.history[-1]["content"])
-                
-            #     text = self.tokenizer.apply_chat_template(
-            #         self.history,
-            #         tokenize=False,
-            #         continue_final_message=True
-            #     )
-
-            #     model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
-            #     generated_ids = self.model.generate(
-            #         **model_inputs,
-            #         max_new_tokens=self.budget - used,
-            #         do_sample=True,
-            #     )
-            #     generated_ids = [
-            #         output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-            #     ]
-            #     response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-
-            #     # Truncate to before </think>
-            #     if "</think>" in response:
-            #         idx = response.find("</think>")
-            #         response = response[:idx]
-                
-            #     full_response += response
-            #     self.history[-1]["content"] = full_response
-            #     used += len(self.tokenizer([response]))
-                
-            #     model_inputs = None 
-            #     generated_ids = None
-            #     torch.cuda.empty_cache()
             
-            # self.history[-1]['content'] = full_response
-                
-            # Generate final answer
-            text = self.tokenizer.apply_chat_template(
-                self.history,
-                tokenize=False,
-            )
-
-            model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
-            generated_ids = self.model.generate(
-                **model_inputs,
-                max_new_tokens=max_new_tokens,
-                do_sample=True,
-            )
-            generated_ids = [
-                output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-            ]
-            response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-            # full_response += response
-
+            response = ""
             self.history.append(
                 {"role": "model", "content": response}
             )
+            while re.search(r"<answer>(?s:.*)</answer>", response) is None:
+                # Continue answer
+                text = self.tokenizer.apply_chat_template(
+                    self.history,
+                    tokenize=False,
+                    continue_final_message=True
+                )
+
+                model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
+                generated_ids = self.model.generate(
+                    **model_inputs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=True,
+                )
+                generated_ids = [
+                    output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+                ]
+                response += self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+            
+            response = re.search(r"<answer>(?s:.*)</answer>", response)[0]
+            self.history[-1]["content"] = response
             
             model_inputs = None 
             generated_ids = None
@@ -195,9 +147,6 @@ class ModelWrapper():
                 )
             response = response.choices[0].message.content
 
-            # if "gpt" in self.model_name:
             self.history.append({"role": "assistant", "content": response})
-            # else:
-            #     self.history.append({"role": "model", "content": response})
 
         return response
