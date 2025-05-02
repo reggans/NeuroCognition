@@ -102,7 +102,6 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     # Get and validate response
                     if re.search(r"<answer>(?s:.*)</answer>", response) is not None:
                         chosen_box = re.search(r"<answer>(?s:.*)</answer>", response)[0]
-                        model.hi
                         chosen_box = re.sub(r"<answer>|</answer>", "", chosen_box).strip()
                         try:
                             chosen_box = int(chosen_box)
