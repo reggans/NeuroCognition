@@ -43,9 +43,9 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
             cot_prompt = cot_prompt + "Track the boxes where the tokens have been found before.\n"""
         else:
             raise ValueError("CoT must be None, or either of 'implicit' or 'explicit'.")
-        question = f"Answer concisely. {cot_prompt}Which of the {n_boxes} boxes would you like to open?\nState your final answer by wrapping it with <ANS> and </ANS>"
+        question = f"Answer concisely. {cot_prompt}Which of the {n_boxes} boxes would you like to open?\nState your final answer by wrapping it with <answer> and </answer>"
     else:
-        question = f"Answer immediately with your final answer. Which of the {n_boxes} boxes would you like to open?\nState your final answer by wrapping it with <ANS> and </ANS>"
+        question = f"Answer immediately with your final answer. Which of the {n_boxes} boxes would you like to open?\nState your final answer by wrapping it with <answer> and </answer>"
 
     # Initialize run statistics & variables
     tokens = [string.ascii_uppercase[x] for x in range(n_tokens)]
@@ -100,17 +100,18 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         break
 
                     # Get and validate response
-                    if re.search(r"<ANS>(?s:.*)</ANS>", response) is not None:
-                        chosen_box = re.search(r"<ANS>(?s:.*)</ANS>", response)[0]
-                        chosen_box = re.sub(r"<ANS>|</ANS>", "", chosen_box).strip()
+                    if re.search(r"<answer>(?s:.*)</answer>", response) is not None:
+                        chosen_box = re.search(r"<answer>(?s:.*)</answer>", response)[0]
+                        model.hi
+                        chosen_box = re.sub(r"<answer>|</answer>", "", chosen_box).strip()
                         try:
                             chosen_box = int(chosen_box)
                         except ValueError:
-                            response = model.send_message(f"Please answer with the specified format\nTokens found: {i}\n" + question)
+                            response = model.send_message(f"Please answer with a box number (1-{n_boxes}).\nTokens found: {i}\n" + question)
                             invalid_guess += 1
                             continue
                     else:
-                        response = model.send_message(f"Please answer with the specified format\nTokens found: {i}\n" + question)
+                        response = model.send_message(f"Final answer not found. Please answer with the specified format\nTokens found: {i}\n" + question)
                         invalid_guess += 1
                         continue
                     
