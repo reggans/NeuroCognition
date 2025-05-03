@@ -44,7 +44,8 @@ class ModelWrapper():
             self.model = LLM(
                 model=model_name,
                 tokenizer=model_name,
-                dtype="float16"
+                dtype="float16",
+                tensor_parallel_size=8,
             )
             # self.tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
         # LiteLLM API
