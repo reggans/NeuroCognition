@@ -44,6 +44,7 @@ class ModelWrapper():
             self.model = LLM(
                 model=model_name,
                 tokenizer=model_name,
+                dtype="float16"
             )
             # self.tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
         # LiteLLM API
