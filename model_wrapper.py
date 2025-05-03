@@ -38,16 +38,16 @@ class ModelWrapper():
                     raise ValueError("Please set the HF_TOKEN environment variable or pass it to the CLI.")
             login(token=api_key)
 
-            # self.model = transformers.AutoModelForCausalLM.from_pretrained(model_name,
-            #                                                                torch_dtype="auto",
-            #                                                                device_map="auto")
-            self.model = LLM(
-                model=model_name,
-                tokenizer=model_name,
-                dtype="float16",
-                tensor_parallel_size=8,
-            )
-            # self.tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
+            self.model = transformers.AutoModelForCausalLM.from_pretrained(model_name,
+                                                                           torch_dtype="auto",
+                                                                           device_map="auto")
+            # self.model = LLM(
+            #     model=model_name,
+            #     tokenizer=model_name,
+            #     dtype="float16",
+            #     tensor_parallel_size=8,
+            # )
+            self.tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
         # LiteLLM API
         elif model_source == "litellm":
             if api_key is None:
@@ -113,29 +113,29 @@ class ModelWrapper():
             )
             while re.search(r"<answer>(?s:.*)</answer>", response) is None:
                 # Continue answer
-                # text = self.tokenizer.apply_chat_template(
-                #     self.history,
-                #     tokenize=False,
-                #     continue_final_message=True
-                # )
+                text = self.tokenizer.apply_chat_template(
+                    self.history,
+                    tokenize=False,
+                    continue_final_message=True
+                )
 
-                # model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
-                # generated_ids = self.model.generate(
-                #     **model_inputs,
-                #     max_new_tokens=max_new_tokens,
-                #     do_sample=True,
-                # )
-                # generated_ids = [
-                #     output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-                # ]
-                # response += self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+                model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
+                generated_ids = self.model.generate(
+                    **model_inputs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=True,
+                )
+                generated_ids = [
+                    output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+                ]
+                response += self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
 
-                response += self.model.chat(
-                    messages=self.history,
-                    continue_final_message=True,
-                ).outputs[0].text
+                # response += self.model.chat(
+                #     messages=self.history,
+                #     continue_final_message=True,
+                # ).outputs[0].text
 
-                print(response)
+                # print(response)
             
             response = re.search(r"<answer>(?s:.*)</answer>", response)[0]
             self.history[-1]["content"] = response
