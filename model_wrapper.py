@@ -113,9 +113,9 @@ class ModelWrapper():
             )
             # while re.search(r"<answer>(?s:.*)</answer>", response) is None:
             for i in range(3):
-                len_extra = 0
-                if i == 2:
-                    self.history[-1]["content"] += ". My final answer is" # Force final answer
+                # len_extra = 0
+                # if i == 2:
+                    # self.history[-1]["content"] += ". My final answer is" # Force final answer
                     # len_extra = self.tokenizer([". My final answer is <answer>"], return_length=True)[0].length
 
                 # Continue answer
