@@ -143,7 +143,12 @@ class ModelWrapper():
 
             print(response)
             
-            response = re.search(r"<answer>(?s:.*)</answer>", response)[0]
+            response = re.search(r"<answer>(?s:.*)</answer>", response)
+            if response is None:
+                response = ""
+            else:
+                response = response[0]
+                
             self.history[-1]["content"] = response
             
             model_inputs = None 
