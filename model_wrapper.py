@@ -119,7 +119,10 @@ class ModelWrapper():
                     continue_final_message=True
                 )
 
-                model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
+                model_inputs = self.tokenizer([text], 
+                                              return_tensors="pt",
+                                              truncation=True, 
+                                              max_length=120000).to(self.model.device)
                 generated_ids = self.model.generate(
                     **model_inputs,
                     max_new_tokens=max_new_tokens,
