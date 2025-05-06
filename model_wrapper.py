@@ -142,7 +142,7 @@ class ModelWrapper():
                 #     continue_final_message=True,
                 # ).outputs[0].text
 
-                # print(response)
+            print(response)
             
             response = re.search(r"<answer>(?s:.*)</answer>", response)[0]
             self.history[-1]["content"] = response
