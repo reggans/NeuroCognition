@@ -111,7 +111,11 @@ class ModelWrapper():
             self.history.append(
                 {"role": "model", "content": response}
             )
-            while re.search(r"<answer>(?s:.*)</answer>", response) is None:
+            # while re.search(r"<answer>(?s:.*)</answer>", response) is None:
+            for i in range(3):
+                if i == 2:
+                    self.history[-1][response] += ". My final answer is <answer>"
+                    
                 # Continue answer
                 text = self.tokenizer.apply_chat_template(
                     self.history,
