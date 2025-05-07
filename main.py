@@ -157,7 +157,8 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                             msg += f"{token} tokens found: {n_boxes - len(legal_boxes[token])}\n"
 
                     response = model.send_message(msg + question)
-    
+                    model.history[-2]["content"] = msg      # Truncate user response length
+
     run_stats = {
         "worst_case_guesses": worst_case_n,
         "illegal": illegal_guess,
