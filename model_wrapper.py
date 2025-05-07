@@ -3,7 +3,7 @@ import google
 import openai
 import transformers
 from huggingface_hub import login
-from vllm import LLM
+# from vllm import LLM
 import torch
 from tqdm.auto import tqdm
 
