@@ -5,6 +5,7 @@ import transformers
 from huggingface_hub import login
 from vllm import LLM
 import torch
+from tqdm.auto import tqdm
 
 import os, time, re
 
@@ -141,14 +142,14 @@ class ModelWrapper():
                 #     continue_final_message=True,
                 # ).outputs[0].text
 
-            print(response)
+            tqdm.write(response)
             
             response = re.search(r"<answer>(?s:.*)</answer>", response)
             if response is None:
                 response = ""
             else:
                 response = response[0]
-                
+
             self.history[-1]["content"] = response
             
             model_inputs = None 
