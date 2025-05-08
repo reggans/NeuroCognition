@@ -147,10 +147,10 @@ class ModelWrapper():
             response = re.search(r"<answer>(?s:.*)</answer>", response)
             if response is None:
                 response = ""
+                self.history.pop(-1)
             else:
                 response = response[0]
-
-            self.history[-1]["content"] = response
+                self.history[-1]["content"] = response
             
             model_inputs = None 
             generated_ids = None
