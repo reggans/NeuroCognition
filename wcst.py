@@ -102,7 +102,7 @@ if __name__ == "__main__":
     if cot:
         system_prompt += "Explain your thought process regarding the problem and the feedbacks you received.\n"
     
-    save_path = f"data/{args.mode_source}_{args.model}_{variant}_{max_trials}-{num_correct}.json"
+    save_path = f"data/{args.model_source}_{args.model}_{variant}_{max_trials}-{num_correct}.json"
     if few_shot:
         save_path = save_path.replace(".json", "_few_shot.json")
     if cot:
