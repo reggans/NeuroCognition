@@ -84,6 +84,12 @@ if __name__ == "__main__":
     few_shot = args.few_shot
     cot = args.cot
 
+    if not os.path.isdir("./wcst_data"):
+        os.mkdir("./wcst_data")
+
+    save_path = f"data/{args.model_source}_{args.model.replace('/', '-')}{'_cot' if args.cot is not None else ''}_{variant}_{max_trials}-{num_correct}"
+    print(f"Saving to: {save_path}")
+
     if variant == "card":
         system_prompt = wcst_prompt
         rules = ["color", "shape", "number"]
