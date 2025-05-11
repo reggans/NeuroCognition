@@ -115,7 +115,7 @@ if __name__ == "__main__":
         torch.cuda.empty_cache()
         save_rep = []
 
-        model = ModelWrapper(args.model, args.model_source, api_key=args.api_key, max_new_tokens=args.max_tokens)
+        model = ModelWrapper(args.model, args.model_source, api_key=args.api_key)
         model.init_chat(system_prompt)
 
         n_trials = 0
