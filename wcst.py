@@ -4,7 +4,7 @@ import google
 import torch
 from tqdm.auto import tqdm
 
-import json, argparse, random, time, os
+import json, argparse, random, time, os, re
 
 from utils import generate_few_shot, wcst_generator, string_generator
 from model_wrapper import ModelWrapper
