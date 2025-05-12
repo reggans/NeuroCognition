@@ -108,7 +108,6 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         except ValueError:
                             response = model.send_message(f"Please answer with a box number (1-{n_boxes}).\nTokens found: {i}\n" + question)
                             model.history.pop(-2)
-                            model.history.pop(-3)
                             invalid_guess += 1
                             continue
                     else:
