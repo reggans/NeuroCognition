@@ -159,27 +159,28 @@ if __name__ == "__main__":
             
                                 n_trials += 1
                                 response = model.send_message(correct_prefix + test_prompt)
-                                # ans = response.split("ANSWER: ")[-1].strip()
+                                ans = re.search(r"<answer>(?s:.*)</answer>", response)
 
-                                if len(response) != 1:
+                                if ans is None:
                                     correct_prefix = """Answer not found. Please state your final answer using the template: \"<answer><index></answer>\""""
                                     correct_cnt = 0
                                     correct_bar.n = 0
                                     correct_bar.last_print_n = 0
                                     correct_bar.refresh()
-
-                                elif response == str(chosen_idx):
-                                    correct_prefix = "Correct!\n"
-                                    correct = True
-                                    correct_cnt += 1
-                                    total_correct += 1
-                                    correct_bar.update(1)
                                 else:
-                                    correct_prefix = "Incorrect. Please try again.\n"
-                                    correct_cnt = 0
-                                    correct_bar.n = 0
-                                    correct_bar.last_print_n = 0
-                                    correct_bar.refresh()
+                                    ans = ans[0]
+                                    if ans == str(chosen_idx):
+                                        correct_prefix = "Correct!\n"
+                                        correct = True
+                                        correct_cnt += 1
+                                        total_correct += 1
+                                        correct_bar.update(1)
+                                    else:
+                                        correct_prefix = "Incorrect. Please try again.\n"
+                                        correct_cnt = 0
+                                        correct_bar.n = 0
+                                        correct_bar.last_print_n = 0
+                                        correct_bar.refresh()
 
                                 # if n_trials % 15 == 0:
                                 #     tqdm.write(f"Rule: {rule}")
@@ -190,6 +191,7 @@ if __name__ == "__main__":
                                             "correct": correct,
                                             "question": test_prompt,
                                             "response": response,
+                                            "model_ans": ans,
                                             "true_ans": chosen_idx}
                                 save_rep.append(save_row)
                     
