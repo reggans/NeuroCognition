@@ -169,6 +169,7 @@ if __name__ == "__main__":
                                     correct_bar.refresh()
                                 else:
                                     ans = ans[0]
+                                    ans = re.sub(r"<answer>|</answer>", "", ans).strip()
                                     tqdm.write(f"DETECTED ANS: {ans}")
                                     if ans == str(chosen_idx):
                                         correct_prefix = "Correct!\n"
