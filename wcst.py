@@ -87,7 +87,7 @@ if __name__ == "__main__":
     if not os.path.isdir("./wcst_data"):
         os.mkdir("./wcst_data")
 
-    save_path = f"data/{args.model_source}_{args.model.replace('/', '-')}{'_cot' if args.cot is not None else ''}_{variant}_{max_trials}-{num_correct}"
+    save_path = f"wcst_data/{args.model_source}_{args.model.replace('/', '-')}{'_cot' if args.cot is not None else ''}_{variant}_{max_trials}-{num_correct}"
     print(f"Saving to: {save_path}")
 
     if variant == "card":
