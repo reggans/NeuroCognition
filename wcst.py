@@ -158,17 +158,17 @@ if __name__ == "__main__":
                                 trial_bar.update(1)
             
                                 n_trials += 1
-                                ans = model.send_message(correct_prefix + test_prompt)
+                                response = model.send_message(correct_prefix + test_prompt)
                                 # ans = response.split("ANSWER: ")[-1].strip()
 
-                                if len(ans) != 1:
+                                if len(response) != 1:
                                     correct_prefix = """Answer not found. Please state your final answer using the template: \"<answer><index></answer>\""""
                                     correct_cnt = 0
                                     correct_bar.n = 0
                                     correct_bar.last_print_n = 0
                                     correct_bar.refresh()
 
-                                elif ans == str(chosen_idx):
+                                elif response == str(chosen_idx):
                                     correct_prefix = "Correct!\n"
                                     correct = True
                                     correct_cnt += 1
@@ -190,7 +190,6 @@ if __name__ == "__main__":
                                             "correct": correct,
                                             "question": test_prompt,
                                             "response": response,
-                                            "model_ans": ans,
                                             "true_ans": chosen_idx}
                                 save_rep.append(save_row)
                     
