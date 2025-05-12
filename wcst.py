@@ -24,7 +24,7 @@ If you are correct, you have to stick with the same attribute until you are inco
 There is always a true answer in the task, and you have to keep performing the task until the end of the test.
 You have to answer within 300 tokens.
 Your final answer should be a number between 1-4 corresponding to the index of the card you think is the correct match.
-State your final answer using the template: "ANSWER: <index>"
+State your final answer using the template: "<answer><index></answer>"
 
 """
 wcst_random_prompt = """You are performing the Wisconsin Card Sorting Test (WCST).
@@ -42,7 +42,7 @@ If you are correct, you have to stick with the same attribute until you are inco
 There is always a true answer in the task, and you have to keep performing the task until the end of the test.
 You have to answer within 300 tokens.
 Your final answer should be a number between 1-4 corresponding to the index of the card you think is the correct match.
-State your final answer using the template: "ANSWER: <index>"
+State your final answer using the template: "<answer><index></answer>"
 
 """
 random_prompt = """You are performing a modified version of the Wisconsin Card Sorting Test (WCST).
@@ -60,7 +60,7 @@ If you are correct, you have to stick with the same rule until you are incorrect
 There is always a true answer in the task, and you have to keep performing the task until the end of the test.
 You have to answer within 300 tokens.
 Your final answer should be a number between 1-4 corresponding to the index of the string you think is the correct match.
-State your final answer using the template: "ANSWER: <index>"
+State your final answer using the template: "<answer><index></answer>"
 
 """
 
@@ -159,11 +159,11 @@ if __name__ == "__main__":
                                 trial_bar.update(1)
             
                                 n_trials += 1
-                                response = model.send_message(correct_prefix + test_prompt)
-                                ans = response.split("ANSWER: ")[-1].strip()
+                                ans = model.send_message(correct_prefix + test_prompt)
+                                # ans = response.split("ANSWER: ")[-1].strip()
 
                                 if len(ans) != 1:
-                                    correct_prefix = """Answer not found. Please state your final answer using the template: \"ANSWER: <index>\""""
+                                    correct_prefix = """Answer not found. Please state your final answer using the template: \"<answer><index></answer>\""""
                                     correct_cnt = 0
                                     correct_bar.n = 0
                                     correct_bar.last_print_n = 0
@@ -182,10 +182,10 @@ if __name__ == "__main__":
                                     correct_bar.last_print_n = 0
                                     correct_bar.refresh()
 
-                                if n_trials % 15 == 0:
-                                    tqdm.write(f"Rule: {rule}")
-                                    tqdm.write(test_prompt)
-                                    tqdm.write(response)
+                                # if n_trials % 15 == 0:
+                                #     tqdm.write(f"Rule: {rule}")
+                                #     tqdm.write(test_prompt)
+                                    # tqdm.write(response)
 
                                 save_row = {"rule": rule,
                                             "correct": correct,
