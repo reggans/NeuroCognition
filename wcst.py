@@ -87,15 +87,15 @@ if __name__ == "__main__":
     if not os.path.isdir("./wcst_data"):
         os.mkdir("./wcst_data")
 
-    save_path = f"wcst_data/{args.model_source}_{args.model.replace('/', '-')}{'_cot' if cot else ''}_{variant}_{max_trials}-{num_correct}.json"
+    save_path = f"wcst_data/{args.model_source}_{args.model.replace('/', '-')}_{variant}_{max_trials}-{num_correct}.json"
 
     if few_shot and cot:
         save_path = save_path.replace(".json", "_few_shot_cot.json")
     
-    if few_shot:
+    elif few_shot:
         save_path = save_path.replace(".json", "_few_shot.json")
     
-    if cot:
+    elif cot:
         save_path = save_path.replace(".json", "_cot.json")
     
     print(f"Saving to: {save_path}")
@@ -136,8 +136,8 @@ if __name__ == "__main__":
     if cot:
         system_prompt += f"Explain your thought process regarding the problem and the feedbacks you received in maximum {args.think_budget} tokens wrapped with <think> and </think>. Then, provide a really short summary of your reasoning after the closing </think> tag.\n"
 
-    save = []
-
+    save = {}
+    history = {}
     for rep in range(args.repeats):
         model = None
         torch.cuda.empty_cache()
@@ -205,7 +205,7 @@ if __name__ == "__main__":
                                     correct_bar.last_print_n = 0
                                     correct_bar.refresh()
                                     
-                                if n_trials % 15 == 0:
+                                if n_trials % 50 == 0:
                                     tqdm.write(f"Rule: {rule}")
                                     tqdm.write(test_prompt)
                                     tqdm.write(response)
@@ -226,6 +226,11 @@ if __name__ == "__main__":
         print(f"Total number of trials: {n_trials}")
         print(f"Total accuracy: {total_correct/n_trials}")
     
-        save.append(save_rep)
+        save[f"run_{rep+1}"] = save_rep
+        run_history[f"run_{rep+1}"] = model.history
+
         with open(save_path, "w") as f:
             json.dump(save, f, indent=4)
+        
+        with open(save_path.replace(".json", "_history.json", "w")) as f:
+            json.dump(run_history, f, indent=4)
