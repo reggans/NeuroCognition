@@ -71,7 +71,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
 
                 # Save to temp file
                 with open("data/temp_history.json", "w") as f:
-                    json.dump(model.history, f)
+                    json.dump(model.history, f, indent=4)
                 
                 # End test
                 if all([len(legal) == 0 for legal in legal_boxes.values()]):
@@ -87,7 +87,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     guess_bar.update(1)
 
                     with open("data/temp_history.json", "w") as f:
-                        json.dump(model.history, f)
+                        json.dump(model.history, f, indent=4)
                     
                     if total_guess >= worst_case_n:
                         break
@@ -234,11 +234,10 @@ if __name__ == "__main__":
         run_history[f"run_{i+1}"] = model.history
 
         with open(file_header + "run_stats.json", "w") as f:
-            json.dump(run_stats, f)
+            json.dump(run_stats, f, indent=4)
         
         with open(file_header + "run_history.json", "w") as f:
-            json.dump(run_history, f)
-
+            json.dump(run_history, f, indent=4)
 
     avg_stats = {}
     for key in run_stats["run_1"].keys():
