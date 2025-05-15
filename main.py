@@ -168,7 +168,7 @@ if __name__ == "__main__":
     parser.add_argument("--model_source", type=str, default="hf", help="The source of the model.")
     parser.add_argument("--n_boxes", type=int, default=6, help="The number of boxes in the test. More == harder.")
     parser.add_argument("--n_tokens", type=int, default=1, help="The number of different tokens present at the same time. More == harder")
-    parser.add_argument("--cot", type=str, default=None, help="The type of CoT to use.")
+    parser.add_argument("--cot", action="store_true")
     parser.add_argument("--runs", type=int, default=1, help="The number of runs to perform.")
     parser.add_argument("--max_tokens", type=int, default=512, help="The maximum number of tokens to generate.")
     parser.add_argument("--think_budget", type=int, default=64, help="The budget tokens for reasoning.")
@@ -176,8 +176,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Input validation
-    if args.cot is not None and args.cot not in ["implicit", "explicit"]:
-        raise ValueError("CoT must be None, or either of 'implicit' or 'explicit'")
     if args.model_source not in ["hf", "google", "litellm", "vllm"]:
         raise ValueError("Model source must be either 'hf', 'google', 'litellm', or 'vllm'.")
 
@@ -194,7 +192,7 @@ if __name__ == "__main__":
     if not os.path.isdir("./data"):
         os.mkdir("./data")
 
-    file_header = f"data/{args.model_source}_{args.model.replace('/', '-')}{'_' + args.cot if args.cot is not None else ''}_{args.n_boxes}_{args.n_tokens}_"
+    file_header = f"data/{args.model_source}_{args.model.replace('/', '-')}{'_' + args.cot if args.cot else ''}_{args.n_boxes}_{args.n_tokens}_"
     print(f"Saving to: {file_header}")
 
     # Check if results already exist
@@ -223,6 +221,8 @@ if __name__ == "__main__":
 
     run_stats = {}
     run_history = {}
+    run_reasoning = {}  # Add new dictionary for reasoning traces
+    
     for i in range(args.runs):
         model = None
         torch.cuda.empty_cache()
@@ -232,12 +232,16 @@ if __name__ == "__main__":
         print(f"Run {i+1}/{args.runs}")
         run_stats[f"run_{i+1}"] = run_swm(model, args.n_boxes, n_tokens=args.n_tokens, cot=args.cot, think_budget=args.think_budget)
         run_history[f"run_{i+1}"] = model.history
+        run_reasoning[f"run_{i+1}"] = model.reasoning_trace  # Save reasoning trace
 
         with open(file_header + "run_stats.json", "w") as f:
             json.dump(run_stats, f, indent=4)
         
         with open(file_header + "run_history.json", "w") as f:
             json.dump(run_history, f, indent=4)
+            
+        with open(file_header + "run_reasoning.json", "w") as f:  # Save reasoning traces
+            json.dump(run_reasoning, f, indent=4)
 
     avg_stats = {}
     for key in run_stats["run_1"].keys():
