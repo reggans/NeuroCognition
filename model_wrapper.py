@@ -76,6 +76,7 @@ class ModelWrapper():
         self.model_name = model_name
         self.model_source = model_source
         self.max_new_tokens = max_new_tokens
+        self.reasoning_trace = []  # Add new private attribute
 
         # Gemini API
         if model_source == "google":
@@ -138,6 +139,8 @@ class ModelWrapper():
             self.history = [
                 {"role": "system", "content": task_prompt},
             ]
+        
+        self.reasoning_trace = []  # Reset reasoning trace when starting new chat
         
     def send_message(self, message, max_new_tokens=None, truncate_history=False, cot=False):
         if not validate_message_turns(self.history):
@@ -213,6 +216,21 @@ class ModelWrapper():
                 )
             raw_response = raw_response.choices[0].message.content
 
+        # Add this code after getting raw_response but before updating history
+        if cot:
+            # Extract reasoning trace from response
+            trace = re.search(r"<think>(.*?)</think>", raw_response, re.DOTALL)
+            if trace:
+                self.reasoning_trace.append({
+                    "user_message": message,
+                    "reasoning": trace.group(1).strip()
+                })
+            else:
+                self.reasoning_trace.append({
+                    "user_message": message,
+                    "reasoning": raw_response.strip()
+                })
+
         # Parse response
         if truncate_history:
             # Remove reasoning trace and get content after </think>
@@ -220,7 +238,9 @@ class ModelWrapper():
             if parsed:
                 response = parsed.group(1).strip()
             else:
-                response = raw_response.strip()
+                 # If no closing </think> tag found, limit to last 256 words
+                words = raw_response.split()
+                response = ' '.join(words[-256:]).strip()
         
         # Update history based on model source
         if self.model_source == "google":
