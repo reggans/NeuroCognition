@@ -192,7 +192,7 @@ if __name__ == "__main__":
     if not os.path.isdir("./data"):
         os.mkdir("./data")
 
-    file_header = f"data/{args.model_source}_{args.model.replace('/', '-')}{'_' + args.cot if args.cot else ''}_{args.n_boxes}_{args.n_tokens}_"
+    file_header = f"data/{args.model_source}_{args.model.replace('/', '-')}{'_cot' if args.cot else ''}_{args.n_boxes}_{args.n_tokens}_"
     print(f"Saving to: {file_header}")
 
     # Check if results already exist
