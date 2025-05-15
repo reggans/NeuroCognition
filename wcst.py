@@ -103,13 +103,14 @@ if __name__ == "__main__":
         with open(save_path, 'r') as f:
             save = json.load(f)
             
-        # Calculate and display statistics for existing results
-        for rep_idx, save_rep in enumerate(save):
+        # Calculate and display statistics for each run
+        for run_key in save:
+            save_rep = save[run_key]
             total_trials = len(save_rep)
-            total_correct = sum(1 for row in save_rep if row["correct"])
-            completed_categories = len(set(row["rule"] for row in save_rep if row["correct"]))
+            total_correct = sum(1 for row in save_rep if "correct" in row and row["correct"])
+            completed_categories = len(set(row["rule"] for row in save_rep if "correct" in row and row["correct"]))
             
-            print(f"\nRepeat {rep_idx + 1} Statistics:")
+            print(f"\n{run_key.title()} Statistics:")
             print(f"Completed categories: {completed_categories}")
             print(f"Total number of trials: {total_trials}")
             print(f"Total accuracy: {total_correct/total_trials:.3f}")
