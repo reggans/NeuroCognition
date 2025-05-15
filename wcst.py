@@ -22,7 +22,6 @@ If you believe the rule has changed, you have to figure out the correct rule to 
 If you are correct, you have to stick with the same attribute until you are incorrect.
 There is always a true answer in the task, and you have to keep performing the task until the end of the test.
 Your final answer should be a number between 1-4 corresponding to the index of the card you think is the correct match.
-State your final answer using the template: "<answer>your answer</answer>"
 
 """
 wcst_random_prompt = """You are performing the Wisconsin Card Sorting Test (WCST).
@@ -39,7 +38,6 @@ If you believe the rule has changed, you have to figure out the correct rule to 
 If you are correct, you have to stick with the same attribute until you are incorrect.
 There is always a true answer in the task, and you have to keep performing the task until the end of the test.
 Your final answer should be a number between 1-4 corresponding to the index of the card you think is the correct match.
-State your final answer using the template: "<answer>your answer</answer>"
 
 """
 random_prompt = """You are performing a modified version of the Wisconsin Card Sorting Test (WCST).
@@ -56,7 +54,6 @@ If you believe the rule has changed, you have to figure out the correct rule to 
 If you are correct, you have to stick with the same rule until you are incorrect.
 There is always a true answer in the task, and you have to keep performing the task until the end of the test.
 Your final answer should be a number between 1-4 corresponding to the index of the string you think is the correct match.
-State your final answer using the template: "<answer>your answer</answer>"
 
 """
 
@@ -135,9 +132,14 @@ if __name__ == "__main__":
 
     if cot:
         system_prompt += f"Explain your thought process regarding the problem and the feedbacks you received in maximum {args.think_budget} tokens wrapped with <think> and </think>. Then, provide a really short summary of your reasoning after the closing </think> tag.\n"
+    else:
+        system_prompt += "Answer only with your final answer.\n"
+    system_prompt += """State your final answer using the template: "<answer>your answer</answer>"\n"""
 
     save = {}
-    history = {}
+    run_history = {}
+    run_reasoning = {}  # Add new dictionary for reasoning traces
+    
     for rep in range(args.repeats):
         model = None
         torch.cuda.empty_cache()
@@ -228,9 +230,13 @@ if __name__ == "__main__":
     
         save[f"run_{rep+1}"] = save_rep
         run_history[f"run_{rep+1}"] = model.history
+        run_reasoning[f"run_{rep+1}"] = model.reasoning_trace  # Save reasoning trace
 
         with open(save_path, "w") as f:
             json.dump(save, f, indent=4)
         
-        with open(save_path.replace(".json", "_history.json", "w")) as f:
+        with open(save_path.replace(".json", "_history.json"), "w") as f:
             json.dump(run_history, f, indent=4)
+            
+        with open(save_path.replace(".json", "_reasoning.json"), "w") as f:  # Save reasoning traces
+            json.dump(run_reasoning, f, indent=4)
