@@ -9,7 +9,7 @@ import string
 
 from model_wrapper import ModelWrapper
 
-def run_swm(model, n_boxes, n_tokens=1, cot=None, think_budget=64):
+def run_swm(model, n_boxes, n_tokens=1, cot=None, think_budget=64, note_assist=False):
     """
     Run the Spatial Working Memory (SWM) test with the given model.
     Args:
@@ -91,6 +91,20 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     
                     if total_guess >= worst_case_n:
                         break
+                    
+                    # Note-taking assistance
+                    if note_assist:
+                        notes = ""
+                        for token, legal in legal_boxes.items():
+                            notes += f"Boxes that has contained token {token}: "
+                            for box in range(1, n_boxes+1):
+                                if box not in legal:
+                                    notes += f"{box}, "
+                            notes += "\n"
+                        notes += f"Opened boxes: "
+                        for box in opened_boxes:
+                            notes += f"{box}, "
+                        notes += "\n"
 
                     # Get and validate response
                     if re.search(r"<answer>(?s:.*)</answer>", response) is not None:
@@ -99,11 +113,11 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         try:
                             chosen_box = int(chosen_box)
                         except ValueError:
-                            response = model.send_message(f"Please answer with a box number (1-{n_boxes}).\nTokens found: {i}\n" + question, truncate_history=True, cot=cot)
+                            response = model.send_message(f"Please answer with a box number (1-{n_boxes}).\nTokens found: {i}\n" + notes + question, truncate_history=True, cot=cot)
                             invalid_guess += 1
                             continue
                     else:
-                        response = model.send_message(f"Please answer with the specified format\nTokens found: {i}\n" + question, truncate_history=True, cot=cot)
+                        response = model.send_message(f"Please answer with the specified format\nTokens found: {i}\n" + notes + question, truncate_history=True, cot=cot)
                         invalid_guess += 1
                         continue
                     
@@ -139,7 +153,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         for token in tokens:
                             msg += f"{token} tokens found: {n_boxes - len(legal_boxes[token])}\n"
 
-                    response = model.send_message(msg + question, truncate_history=True, cot=cot)
+                    response = model.send_message(msg + notes + question, truncate_history=True, cot=cot)
                     model.history[-2]["content"] = msg      # Truncate user response length
 
     run_stats = {
