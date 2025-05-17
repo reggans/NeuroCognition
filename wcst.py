@@ -57,6 +57,18 @@ Your final answer should be a number between 1-4 corresponding to the index of t
 
 """
 
+empty_prompt = """You are performing a modified version of the Wisconsin Card Sorting Test (WCST).
+One option among 1, 2, 3, and 4 is the correct answer.
+You will be told "Correct!" if you are correct and "Incorrect. Please try again." if you are incorrect.
+If you are incorrect, you either made a mistake or the rule has changed. 
+If you believe you have made a mistake, correct it and try again.
+If you believe the correct answer has changed, you have to figure out the correct answer.
+If you are correct, you have to stick with the same answer until you are incorrect.
+There is always a true answer in the task, and you have to keep performing the task until the end of the test.
+Your final answer should be a number between 1-4 corresponding to the index of the answer you think is correct.
+
+"""
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default="llama")
