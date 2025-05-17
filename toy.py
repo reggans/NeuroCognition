@@ -4,7 +4,7 @@ parser = argparse.ArgumentParser(description="Run the SWM toy problem.")
 parser.add_argument("--num_boxes", type=int, default=6, help="The number of boxes in the test. More == harder.")
 args = parser.parse_args()
 
-question = "Which box would you like to open?\n"
+question = "Which box would you like to open?\nAnswer: "
 
 legal_boxes = [x for x in range(1, args.num_boxes+1)]
 worst_case_n = sum(legal_boxes)
