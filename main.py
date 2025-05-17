@@ -185,6 +185,7 @@ if __name__ == "__main__":
     parser.add_argument("--runs", type=int, default=1, help="The number of runs to perform.")
     parser.add_argument("--max_tokens", type=int, default=512, help="The maximum number of tokens to generate.")
     parser.add_argument("--think_budget", type=int, default=64, help="The budget tokens for reasoning.")
+    parser.add_argument("--notes", action="store_true")
     parser.add_argument("--api_key", type=str, default=None, help="API key to use. If none, uses key stored in environment variable.")
     args = parser.parse_args()
 
@@ -204,8 +205,12 @@ if __name__ == "__main__":
     
     if not os.path.isdir("./data"):
         os.mkdir("./data")
+    
+    if args.notes:
+        if not os.path.isdir("./data/baselines"):
+            os.mkdir("./data/baselines")
 
-    file_header = f"data/{args.model_source}_{args.model.replace('/', '-')}{'_cot' if args.cot else ''}_{args.n_boxes}_{args.n_tokens}_"
+    file_header = f"data/{'baselines/' if args.notes else ''}{args.model_source}_{args.model.replace('/', '-')}{'_cot' if args.cot else ''}_{args.n_boxes}_{args.n_tokens}_"
     print(f"Saving to: {file_header}")
 
     # Check if results already exist
@@ -243,7 +248,7 @@ if __name__ == "__main__":
         model = ModelWrapper(args.model, args.model_source, api_key=args.api_key, max_new_tokens=args.max_tokens)
 
         print(f"Run {i+1}/{args.runs}")
-        run_stats[f"run_{i+1}"] = run_swm(model, args.n_boxes, n_tokens=args.n_tokens, cot=args.cot, think_budget=args.think_budget)
+        run_stats[f"run_{i+1}"] = run_swm(model, args.n_boxes, n_tokens=args.n_tokens, cot=args.cot, think_budget=args.think_budget, note_assist=args.notes)
         run_history[f"run_{i+1}"] = model.history
         run_reasoning[f"run_{i+1}"] = model.reasoning_trace  # Save reasoning trace
 
