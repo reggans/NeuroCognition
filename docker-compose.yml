@@ -1,0 +1,29 @@
+services:
+  faiz-vllm-qwen3-8b: # set your service name
+    image: vllm/vllm-openai:latest
+    ports:
+      - "8877:8877"
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    command: > # change model config here, especially the model name (can be a local path or a huggingface model name)
+      --host 0.0.0.0  --port 8877  --model Qwen/Qwen3-8B --tensor-parallel-size ${TP_SIZE:-1} --gpu-memory-utilization ${GPU_MEM_UTIL:-0.9} --enable-prefix-caching --enable-chunked-prefill --max-num-batched-tokens 24000 --disable-log-requests --device cuda --dtype bfloat16 --max_model_len 16384
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: [ '4' ] # set your GPU id that want to be used here
+              capabilities: [ gpu ]
+    ipc: host
+    networks:
+      - faiz-net # set your network name here, must be the same network as the workspace container
+
+  # create more services here if needed
+  
+networks:
+  faiz-net:
+    name: faiz-net
+    external: true
