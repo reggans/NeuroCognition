@@ -171,4 +171,5 @@ cython_debug/
 .pypirc
 
 data*/
+wcst_data*/
 viz.ipynb
