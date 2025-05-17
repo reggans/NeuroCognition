@@ -105,6 +105,10 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         for box in opened_boxes:
                             notes += f"{box}, "
                         notes += "\n"
+                    
+                    msg = ""
+                    for token in tokens:
+                        msg += f"{token} tokens found: {n_boxes - len(legal_boxes[token])}\n"
 
                     # Get and validate response
                     if re.search(r"<answer>(?s:.*)</answer>", response) is not None:
@@ -113,11 +117,11 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         try:
                             chosen_box = int(chosen_box)
                         except ValueError:
-                            response = model.send_message(f"Please answer with a box number (1-{n_boxes}).\nTokens found: {i}\n" + notes + question, truncate_history=True, cot=cot)
+                            response = model.send_message(f"Please answer with a box number (1-{n_boxes}).\n" + msg + notes + question, truncate_history=True, cot=cot)
                             invalid_guess += 1
                             continue
                     else:
-                        response = model.send_message(f"Please answer with the specified format\nTokens found: {i}\n" + notes + question, truncate_history=True, cot=cot)
+                        response = model.send_message(f"Please answer with the specified format\n" + msg + notes + question, truncate_history=True, cot=cot)
                         invalid_guess += 1
                         continue
                     
@@ -144,14 +148,9 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     msg = ""
                     if found:
                         for token in found_tokens:
-                            msg += f"Token {token} found in box {chosen_box}.\n"
-                        
-                        for token in tokens:
-                            msg += f"{token} tokens found: {n_boxes - len(legal_boxes[token])}\n"
+                            msg = f"Token {token} found in box {chosen_box}.\n" + msg
                     else:
-                        msg += f"No tokens found in box {chosen_box}.\n"
-                        for token in tokens:
-                            msg += f"{token} tokens found: {n_boxes - len(legal_boxes[token])}\n"
+                        msg += f"No tokens found in box {chosen_box}.\n" + msg
 
                     response = model.send_message(msg + notes + question, truncate_history=True, cot=cot)
                     model.history[-2]["content"] = msg      # Truncate user response length
