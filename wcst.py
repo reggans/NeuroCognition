@@ -93,8 +93,8 @@ if __name__ == "__main__":
 
     print(f"few_shot: {few_shot}")
 
-    if not os.path.isdir("./wcst_data"):
-        os.mkdir("./wcst_data")
+    if not os.path.isdir("wcst_data"):
+        os.mkdir("wcst_data")
 
     save_path = f"wcst_data/{args.model_source}_{args.model.replace('/', '-')}_{variant}_{max_trials}-{num_correct}.json"
 
@@ -137,6 +137,11 @@ if __name__ == "__main__":
     elif variant == "string":
         system_prompt = random_prompt
         rules = ["length", "vowels", "consonants"]
+    elif variant == "empty":
+        system_prompt = empty_prompt
+        rules = [1, 2, 3, 4]
+        if few_shot:
+            raise NotImplementedError
     else:
         raise Exception("Variant not recognized")
 
@@ -180,14 +185,20 @@ if __name__ == "__main__":
                                 given, opt = wcst_generator(rule, False)
                             elif variant == "card-random":
                                 given, opt = wcst_generator(rule, True)
-                            else:
+                            elif variant == "string":
                                 given, opt = string_generator(rule)
 
-                            chosen = opt[0]
-                            random.shuffle(opt)
-                            chosen_idx = opt.index(chosen) + 1
-            
-                            test_prompt = f"""Given: {given}\nOptions:\n1. {opt[0]}\n2. {opt[1]}\n3. {opt[2]}\n4. {opt[3]}"""
+                            if variant == "empty":
+                                chosen = rule
+                                chosen_idx = rule
+                                
+                                test_prompt = f"""Options:\n1.\n2.\n3.\n4."""
+                            else:
+                                chosen = opt[0]
+                                random.shuffle(opt)
+                                chosen_idx = opt.index(chosen) + 1
+
+                                test_prompt = f"""Given: {given}\nOptions:\n1. {opt[0]}\n2. {opt[1]}\n3. {opt[2]}\n4. {opt[3]}"""
 
                             correct = False
                             while not correct:
