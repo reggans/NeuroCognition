@@ -78,6 +78,7 @@ if __name__ == "__main__":
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--few_shot", action="store_true")
     parser.add_argument("--cot", action="store_true")
+    parser.add_argument("--hint", action="store_true")
     parser.add_argument("--model_source", type=str, default="hf", help="The source of the model.")
     parser.add_argument("--max_tokens", type=int, default=512, help="The maximum number of tokens to generate.")
     parser.add_argument("--think_budget", type=int, default=64, help="The budget tokens for reasoning.")
@@ -199,6 +200,10 @@ if __name__ == "__main__":
                                 chosen_idx = opt.index(chosen) + 1
 
                                 test_prompt = f"""Given: {given}\nOptions:\n1. {opt[0]}\n2. {opt[1]}\n3. {opt[2]}\n4. {opt[3]}"""
+                            
+                            # Add hint
+                            if args.hint:
+                                test_prompt += f"\nRule: {rule}"
 
                             correct = False
                             while not correct:
