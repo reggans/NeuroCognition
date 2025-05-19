@@ -35,7 +35,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
 
     # Configure the question presented each turn and CoT prompt
     if cot is not None:
-        cot_prompt = f"Think step-by-step, utilizing information from previous feedbacks, and state your reasoning in maximum {think_budget} tokens, wrapped with <think> and </think>. Then, provide a really short summary of your reasoning after the closing </think> tag.\n"
+        cot_prompt = f"Think step-by-step, utilizing information from previous feedbacks, and state your reasoning in maximum {think_budget} tokens, wrapped with <think> and </think>. After the closing </think> tag, provide a really short summary of your reasoning and your final answer.\n"
         question = f"Answer concisely. {cot_prompt}Which of the {n_boxes} boxes would you like to open?\nYour final answer should be a box number, wrapped with <answer> and </answer>"
     else:
         question = f"Answer only with your final answer. Which of the {n_boxes} boxes would you like to open?\nYour final answer should be a box number, wrapped with <answer> and </answer>"

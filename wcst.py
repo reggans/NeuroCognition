@@ -150,7 +150,7 @@ if __name__ == "__main__":
         system_prompt += generate_few_shot(variant)
 
     if cot:
-        system_prompt += f"Explain your thought process regarding the problem and the feedbacks you received in maximum {args.think_budget} tokens wrapped with <think> and </think>. Then, provide a really short summary of your reasoning after the closing </think> tag.\n"
+        system_prompt += f"Explain your thought process regarding the problem and the feedbacks you received in maximum {args.think_budget} tokens wrapped with <think> and </think>. After the closing </think> tag, provide a really short summary of your reasoning and your final answer.\n"
     else:
         system_prompt += "Answer only with your final answer.\n"
     system_prompt += """State your final answer using the template: "<answer>your answer</answer>"\n"""
