@@ -11,40 +11,49 @@ def load_run_stats(stats_file):
 
 def calculate_score(runs):
     """Calculate score for WCST runs"""
-    scores = []
-    # Each run is a list of trials
-    for run_data in runs:
-        if isinstance(run_data, list):  # Make sure it's a list of trials
-            trial_scores = []
-            current_rule = ""
-            completion_lengths = []
-            num_correct = 0
-            
-            for query in run_data:
-                if isinstance(query, dict) and 'rule' in query and 'correct' in query:
-                    if query['rule'] != current_rule:
-                        if current_rule != "" and completion_lengths:  # Only append if we have a previous rule
-                            if num_correct >= 5:  # Only count if we reached criterion
-                                trial_scores.append(completion_lengths[-1])
-                        current_rule = query['rule']
-                        completion_lengths.append(0)
-                        num_correct = 0
-                    else:
-                        completion_lengths[-1] += 1
-                    
-                    if query['correct']:
-                        num_correct += 1
-            
-            # Handle the last rule if it met criterion
-            if completion_lengths and num_correct >= 5:
-                trial_scores.append(completion_lengths[-1])
-            
-            if trial_scores:
-                # Calculate score as average of 1/length for each completed rule
-                score = np.mean([1/l for l in trial_scores])
-                scores.append(score)
+    trial_scores = []
+    current_rule = ""
+    completion_lengths = []
+    num_correct = 0
     
-    return np.mean(scores) if scores else 0
+    for query in runs:
+        if isinstance(query, dict) and 'rule' in query and 'correct' in query:
+            if query['rule'] != current_rule:
+                if current_rule != "" and completion_lengths:  # Only append if we have a previous rule
+                    if num_correct >= 5:  # Only count if we reached criterion
+                        trial_scores.append(completion_lengths[-1])
+                current_rule = query['rule']
+                completion_lengths.append(0)
+                num_correct = 0
+            else:
+                completion_lengths[-1] += 1
+            
+            if query['correct']:
+                num_correct += 1
+    
+    # Handle the last rule if it met criterion
+    if completion_lengths and num_correct >= 5:
+        trial_scores.append(completion_lengths[-1])
+    
+    if trial_scores:
+        # Calculate score as average of 1/length for each completed rule
+        score = np.mean([1/l for l in trial_scores])
+    else:
+        score = 0
+    return score
+
+def calculate_accuracy(runs):
+    """Calculate accuracy for WCST runs"""
+    correct_count = 0
+    total_count = 0
+    
+    for query in runs:
+        if isinstance(query, dict) and 'correct' in query:
+            total_count += 1
+            if query['correct']:
+                correct_count += 1
+
+    return correct_count / total_count if total_count > 0 else 0
 
 def get_setup_type(filename):
     """Get the setup type from filename"""
@@ -119,24 +128,26 @@ def analyze_results():
                     continue
                 
                 scores = []
+                accuracies = []
                 for run_id, run_data in stats.items():
-                    if not isinstance(run_data, list):
-                        continue
                     try:
-                        score = calculate_score([run_data])
-                        if score > 0:
-                            scores.append(score)
+                        score = calculate_score(run_data)
+                        scores.append(score)
+
+                        accuracy = calculate_accuracy(run_data)
+                        accuracies.append(accuracy)
                     except Exception as e:
                         print(f"  Error processing run {run_id}: {e}")
-                        continue
                 
-                if scores:
+                if scores and accuracies:
                     if model_name not in results[setup_type][category]:
                         results[setup_type][category][model_name] = {
                             'scores': [],
+                            'accuracies': [],
                             'n_files': 0
                         }
                     results[setup_type][category][model_name]['scores'].extend(scores)
+                    results[setup_type][category][model_name]['accuracies'].extend(accuracies)
                     results[setup_type][category][model_name]['n_files'] += 1
                     
             except Exception as e:
@@ -150,20 +161,26 @@ def analyze_results():
             for model_name in list(results[setup_type][category].keys()):
                 model_data = results[setup_type][category][model_name]
                 scores = model_data['scores']
-                if scores:
+                accuracies = model_data['accuracies']
+                if scores and accuracies:
+                    assert len(scores) == len(accuracies), f"Scores {len(scores)} and accuracies {len(accuracies)} must have the same length"
                     results[setup_type][category][model_name] = {
                         'avg_score': np.mean(scores),
                         'std_score': np.std(scores),
                         'max_score': np.max(scores),
                         'min_score': np.min(scores),
+                        'avg_accuracy': np.mean(accuracies),
+                        'std_accuracy': np.std(accuracies),
+                        'max_accuracy': np.max(accuracies),
+                        'min_accuracy': np.min(accuracies),
                         'n_runs': len(scores),
                         'n_files': model_data['n_files']
                     }
                 else:
                     del results[setup_type][category][model_name]
 
-        # Generate plot for this setup type
-        plt.figure(figsize=(12, 6))
+        # Create figure with 2 subplots
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 12))
         
         all_models = set()
         for category in results[setup_type].values():
@@ -173,6 +190,7 @@ def analyze_results():
         x = np.arange(len(all_models))
         width = 0.2
         
+        # Plot scores (top subplot)
         for i, category in enumerate(['non_cot', 'cot', 'few_shot', 'few_shot_cot']):
             scores = []
             min_scores = []
@@ -193,21 +211,61 @@ def analyze_results():
                 [max_s - s for s, max_s in zip(scores, max_scores)]
             ])
             
-            bars = plt.bar(x + (i-1.5)*width, scores, width, yerr=yerr,
+            bars = ax1.bar(x + (i-1.5)*width, scores, width, yerr=yerr,
                           label=category.replace('_', ' ').title())
             
             for idx, rect in enumerate(bars):
                 height = rect.get_height()
                 if height > 0:
-                    plt.text(rect.get_x() + rect.get_width()/2., height,
+                    ax1.text(rect.get_x() + rect.get_width()/2., height,
                             f'{scores[idx]:.2f}',
                             ha='center', va='bottom')
         
-        plt.xlabel('Models')
-        plt.ylabel('Score')
-        plt.title(f'WCST {setup_type.title()} - Average Scores by Model and Category')
-        plt.xticks(x, all_models, rotation=45, ha='right')
-        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax1.set_xlabel('Models')
+        ax1.set_ylabel('Score')
+        ax1.set_title(f'WCST {setup_type.title()} - Average Scores by Model and Category')
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(all_models, rotation=45, ha='right')
+        ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        
+        # Plot accuracies (bottom subplot)
+        for i, category in enumerate(['non_cot', 'cot', 'few_shot', 'few_shot_cot']):
+            accuracies = []
+            min_accuracies = []
+            max_accuracies = []
+            for model in all_models:
+                if model in results[setup_type][category]:
+                    model_data = results[setup_type][category][model]
+                    accuracies.append(model_data['avg_accuracy'])
+                    min_accuracies.append(model_data['min_accuracy'])
+                    max_accuracies.append(model_data['max_accuracy'])
+                else:
+                    accuracies.append(0)
+                    min_accuracies.append(0)
+                    max_accuracies.append(0)
+            
+            yerr = np.array([
+                [s - min_s for s, min_s in zip(accuracies, min_accuracies)],
+                [max_s - s for s, max_s in zip(accuracies, max_accuracies)]
+            ])
+
+            bars = ax2.bar(x + (i-1.5)*width, accuracies, width, yerr=yerr,
+                          label=category.replace('_', ' ').title())
+            
+            for idx, rect in enumerate(bars):
+                height = rect.get_height()
+                if height > 0:
+                    ax2.text(rect.get_x() + rect.get_width()/2., height,
+                            f'{accuracies[idx]:.2f}',
+                            ha='center', va='bottom')
+        
+        ax2.set_xlabel('Models')
+        ax2.set_ylabel('Accuracy')
+        ax2.set_title(f'WCST {setup_type.title()} - Average Accuracies by Model and Category')
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(all_models, rotation=45, ha='right')
+        ax2.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        
         plt.tight_layout()
         
         plots_dir = Path('./wcst_data/plots')
