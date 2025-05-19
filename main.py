@@ -53,7 +53,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
     repeated_guess = 0
 
     # Start the test
-    response = model.send_message(question, cot=cot)
+    response = model.send_message(question, cot=cot, truncate_history=True)
     with tqdm(total=worst_case_n, desc="Total guesses") as guess_bar:
         with tqdm(total=n_boxes * n_tokens, desc="Tokens") as token_bar:
             token_box = dict.fromkeys(tokens)
@@ -111,8 +111,8 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         msg += f"{token} tokens found: {n_boxes - len(legal_boxes[token])}\n"
 
                     # Get and validate response
-                    if re.search(r"<answer>(?s:.*)</answer>", response) is not None:
-                        chosen_box = re.search(r"<answer>(?s:.*)</answer>", response)[0]
+                    if re.search(r"<answer>(.*?)</answer>", response) is not None:
+                        chosen_box = re.search(r"<answer>(.*?)</answer>", response)[0]
                         chosen_box = re.sub(r"<answer>|</answer>", "", chosen_box).strip()
                         try:
                             chosen_box = int(chosen_box)

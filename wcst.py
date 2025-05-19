@@ -213,9 +213,9 @@ if __name__ == "__main__":
             
                                 n_trials += 1
                                 response = model.send_message(correct_prefix + test_prompt, truncate_history=True, cot=cot)
-                                ans = re.search(r"<answer>(?s:.*)</answer>", response)
+                                ans = re.search(r"<answer>(.*?)</answer>", response)
                                 if ans:
-                                    ans = re.search(r"<answer>(?s:.*)</answer>", response)[0]
+                                    ans = re.search(r"<answer>(.*?)</answer>", response)[0]
                                     ans = re.sub(r"<answer>|</answer>", "", ans).strip()
                                     if ans == str(chosen_idx):
                                         correct_prefix = "Correct!\n"

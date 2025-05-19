@@ -165,7 +165,7 @@ class ModelWrapper():
                 max_new_tokens = self.max_new_tokens
                 
             for i in range(3):
-                if re.search(r"<answer>(?s:.*)</answer>", raw_response) is not None:
+                if re.search(r"<answer>(.*?)</answer>", raw_response) is not None:
                     break
                 # Continue answer
                 text = self.tokenizer.apply_chat_template(
@@ -236,7 +236,7 @@ class ModelWrapper():
             # Remove reasoning trace and get content after </think>
             parsed = re.search(r"</think>(.*?)$", raw_response, re.DOTALL)
             if parsed:
-                response = parsed.group(1).strip()
+                response = parsed.group().strip()
             else:
                  # If no closing </think> tag found, limit to last 256 words
                 words = raw_response.split()
