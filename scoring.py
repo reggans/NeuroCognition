@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import json
 
@@ -6,7 +7,7 @@ def score(file_path):
         data = json.load(file)
     
     scores = []
-    for trial in data:
+    for run_id, trial in data.items():
         current_rule = ""
         completion_lengths = []
         num_correct = 0
@@ -28,3 +29,7 @@ def score(file_path):
         score = np.sum([1/l for l in completion_lengths]) * 5/6
         scores.append(score)
     return np.mean(scores)
+
+if __name__ == "__main__":
+    file_path = os.getenv('FILE_PATH')
+    print(score(file_path))
