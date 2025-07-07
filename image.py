@@ -48,6 +48,7 @@ class SWMImage:
             self._draw_box((x, y))
         
         self.base_img.save(os.path.join(self.save_path, 'base.png'))
+        self.base_img.save(os.path.join(self.save_path, 'current.png'))
 
     def _draw_box(self, box_center):
         self.base_draw.rectangle((box_center[0] - self.box_width/2, box_center[1] - self.box_width/2,
@@ -63,7 +64,7 @@ class SWMImage:
         if box_coord not in self.box_coords:
             return self.base_img
         
-        box = self.box_coords.index(box_coord)
+        box = get_box_id(box_coord)
         box_center = self._convert_grid_to_coords(*box_coord)
         new_img = self.base_img.copy()
         draw = ImageDraw.Draw(new_img)
@@ -80,3 +81,9 @@ class SWMImage:
         new_img.save(os.path.join(self.save_path, f'current.png'))
         
         return new_img
+    
+    def get_box_id(self, box_coord):
+        return self.box_coords.index(box_coord)
+    
+    def get_box_coord(self, box_id):
+        return self.box_coords[box_id]
