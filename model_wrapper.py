@@ -69,13 +69,21 @@ def validate_message_turns(messages: List[Dict], save_error: bool = True) -> boo
     return True
 
 class ModelWrapper():
-    def __init__(self, model_name, model_source, api_key=None, max_new_tokens=512):
+    def __init__(self, model_name, model_source, api_key=None, max_new_tokens=512, image_input=False, image_path=None):
+        if image_input:
+            if image_path is None:
+                raise ValueError("Image path must be provided")
+            if model_source not in ["litellm", "vllm"]:
+                raise NotImplementedError
+
         self.chat = None # Specific to Gemini API, None otherwise
         self.client = None # Specific to LiteLLM API, None otherwise
         self.history = None
         self.model_name = model_name
         self.model_source = model_source
         self.max_new_tokens = max_new_tokens
+        self.image_input = image_input
+        self.image_path = image_path
         self.reasoning_trace = []  # Add new private attribute
 
         # Gemini API
@@ -148,10 +156,19 @@ class ModelWrapper():
 
         # Store original response
         raw_response = None
-
-        self.history.append(
-            {"role": "user", "content": message}
-        )
+        
+        if self.image_input:
+            self.history.append(
+                {"role": "user", 
+                "content": [
+                    {"type": "text", "text": message},
+                    {"type": "image_url", "image_url": {"url": os.path.join(self.image_path, "current.png")}}]}
+            )
+        else:
+            self.history.append(
+                {"role": "user", "content": message}
+            )
+        
 
         if self.model_source == "google":
             try:
