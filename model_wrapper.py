@@ -114,6 +114,16 @@ class ModelWrapper():
                 api_key=api_key,
                 base_url = "REMOVED"
             )
+        elif model_source == "openai":
+            if api_key is None:
+                if os.getenv("OPENAI_API_KEY") is not None:
+                    api_key = os.getenv("OPENAI_API_KEY")
+                else:
+                    raise ValueError("Please set the OPENAI_API_KEY environment variable or pass it to the CLI.")
+
+            self.client = openai.OpenAI(
+                api_key=api_key,
+            )
         # VLLM API
         elif model_source == "vllm":
             vllm_url = f"http://{os.getenv('VLLM_URL')}:8877/v1"
@@ -213,6 +223,21 @@ class ModelWrapper():
                     extra_body={
                         "chat_template_kwargs": {"enable_thinking": bool(cot)},
                     },
+                )
+            raw_response = raw_response.choices[0].message.content
+        elif self.model_source == "openai":
+            try:
+                raw_response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=self.history,
+                    max_tokens=max_new_tokens or self.max_new_tokens,
+                )
+            except:
+                time.sleep(5)
+                raw_response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=self.history,
+                    max_tokens=max_new_tokens or self.max_new_tokens,
                 )
             raw_response = raw_response.choices[0].message.content
 
