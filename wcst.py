@@ -79,12 +79,29 @@ if __name__ == "__main__":
     parser.add_argument("--few_shot", action="store_true")
     parser.add_argument("--cot", action="store_true")
     parser.add_argument("--hint", action="store_true")
-    parser.add_argument("--model_source", type=str, default="hf", help="The source of the model.")
-    parser.add_argument("--max_tokens", type=int, default=512, help="The maximum number of tokens to generate.")
-    parser.add_argument("--think_budget", type=int, default=64, help="The budget tokens for reasoning.")
-    parser.add_argument("--api_key", type=str, default=None, help="API key to use. If none, uses key stored in environment variable.")
+    parser.add_argument(
+        "--model_source",
+        type=str,
+        default="openrouter",
+        help="The source of the model.",
+    )
+    parser.add_argument(
+        "--max_tokens",
+        type=int,
+        default=512,
+        help="The maximum number of tokens to generate.",
+    )
+    parser.add_argument(
+        "--think_budget", type=int, default=64, help="The budget tokens for reasoning."
+    )
+    parser.add_argument(
+        "--api_key",
+        type=str,
+        default=None,
+        help="API key to use. If none, uses key stored in environment variable.",
+    )
     parser.add_argument("--verbose", type=int, default=15)
-    
+
     args = parser.parse_args()
     variant = args.variant
     max_trials = args.max_trials
@@ -101,28 +118,36 @@ if __name__ == "__main__":
 
     if few_shot and cot:
         save_path = save_path.replace(".json", "_few_shot_cot.json")
-    
+
     elif few_shot:
         save_path = save_path.replace(".json", "_few_shot.json")
-    
+
     elif cot:
         save_path = save_path.replace(".json", "_cot.json")
-    
+
     print(f"Saving to: {save_path}")
 
     # Check if results already exist
     if os.path.exists(save_path):
         print(f"Results already exist at {save_path}")
-        with open(save_path, 'r') as f:
+        with open(save_path, "r") as f:
             save = json.load(f)
-            
+
         # Calculate and display statistics for each run
         for run_key in save:
             save_rep = save[run_key]
             total_trials = len(save_rep)
-            total_correct = sum(1 for row in save_rep if "correct" in row and row["correct"])
-            completed_categories = len(set(row["rule"] for row in save_rep if "correct" in row and row["correct"]))
-            
+            total_correct = sum(
+                1 for row in save_rep if "correct" in row and row["correct"]
+            )
+            completed_categories = len(
+                set(
+                    row["rule"]
+                    for row in save_rep
+                    if "correct" in row and row["correct"]
+                )
+            )
+
             print(f"\n{run_key.title()} Statistics:")
             print(f"Completed categories: {completed_categories}")
             print(f"Total number of trials: {total_trials}")
@@ -158,13 +183,18 @@ if __name__ == "__main__":
     save = {}
     run_history = {}
     run_reasoning = {}  # Add new dictionary for reasoning traces
-    
+
     for rep in range(args.repeats):
         model = None
         torch.cuda.empty_cache()
         save_rep = []
 
-        model = ModelWrapper(args.model, args.model_source, api_key=args.api_key, max_new_tokens=args.max_tokens)
+        model = ModelWrapper(
+            args.model,
+            args.model_source,
+            api_key=args.api_key,
+            max_new_tokens=args.max_tokens,
+        )
         model.init_chat(system_prompt)
 
         n_trials = 0
@@ -173,15 +203,17 @@ if __name__ == "__main__":
         correct_prefix = ""
 
         with tqdm(total=max_trials, desc="Total trials") as trial_bar:
-            for _ in range(2):      
+            for _ in range(2):
                 for rule in rules:
                     correct_cnt = 0
-                    
-                    with tqdm(total=num_correct, desc=f"Correct answers for {rule}") as correct_bar:
+
+                    with tqdm(
+                        total=num_correct, desc=f"Correct answers for {rule}"
+                    ) as correct_bar:
                         while correct_cnt < num_correct:
                             if n_trials >= max_trials:
                                 break
-                            
+
                             if variant == "card":
                                 given, opt = wcst_generator(rule, False)
                             elif variant == "card-random":
@@ -192,7 +224,7 @@ if __name__ == "__main__":
                             if variant == "empty":
                                 chosen = rule
                                 chosen_idx = rule
-                                
+
                                 test_prompt = f"""Options:\n1.\n2.\n3.\n4."""
                             else:
                                 chosen = opt[0]
@@ -200,7 +232,7 @@ if __name__ == "__main__":
                                 chosen_idx = opt.index(chosen) + 1
 
                                 test_prompt = f"""Given: {given}\nOptions:\n1. {opt[0]}\n2. {opt[1]}\n3. {opt[2]}\n4. {opt[3]}"""
-                            
+
                             # Add hint
                             if args.hint:
                                 test_prompt += f"\nRule: {rule}"
@@ -210,12 +242,18 @@ if __name__ == "__main__":
                                 if n_trials >= max_trials:
                                     break
                                 trial_bar.update(1)
-            
+
                                 n_trials += 1
-                                response = model.send_message(correct_prefix + test_prompt, truncate_history=True, cot=cot)
+                                response = model.send_message(
+                                    correct_prefix + test_prompt,
+                                    truncate_history=True,
+                                    cot=cot,
+                                )
                                 ans = re.search(r"<answer>(.*?)</answer>", response)
                                 if ans:
-                                    ans = re.search(r"<answer>(.*?)</answer>", response)[0]
+                                    ans = re.search(
+                                        r"<answer>(.*?)</answer>", response
+                                    )[0]
                                     ans = re.sub(r"<answer>|</answer>", "", ans).strip()
                                     if ans == str(chosen_idx):
                                         correct_prefix = "Correct!\n"
@@ -224,7 +262,9 @@ if __name__ == "__main__":
                                         total_correct += 1
                                         correct_bar.update(1)
                                     else:
-                                        correct_prefix = "Incorrect. Please try again.\n"
+                                        correct_prefix = (
+                                            "Incorrect. Please try again.\n"
+                                        )
                                         correct_cnt = 0
                                         correct_bar.n = 0
                                         correct_bar.last_print_n = 0
@@ -235,37 +275,41 @@ if __name__ == "__main__":
                                     correct_bar.n = 0
                                     correct_bar.last_print_n = 0
                                     correct_bar.refresh()
-                                    
+
                                 if n_trials % 50 == 0:
                                     tqdm.write(f"Rule: {rule}")
                                     tqdm.write(test_prompt)
                                     tqdm.write(response)
 
-                                save_row = {"rule": rule,
-                                            "correct": correct,
-                                            "correct_prefix": correct_prefix,
-                                            "question": test_prompt,
-                                            "response": response,
-                                            "model_ans": ans,
-                                            "true_ans": chosen_idx}
+                                save_row = {
+                                    "rule": rule,
+                                    "correct": correct,
+                                    "correct_prefix": correct_prefix,
+                                    "question": test_prompt,
+                                    "response": response,
+                                    "model_ans": ans,
+                                    "true_ans": chosen_idx,
+                                }
                                 save_rep.append(save_row)
-                    
+
                     if correct_cnt == num_correct:
                         completed_cat += 1
 
         print(f"Completed categories: {completed_cat}")
         print(f"Total number of trials: {n_trials}")
         print(f"Total accuracy: {total_correct/n_trials}")
-    
+
         save[f"run_{rep+1}"] = save_rep
         run_history[f"run_{rep+1}"] = model.history
         run_reasoning[f"run_{rep+1}"] = model.reasoning_trace  # Save reasoning trace
 
         with open(save_path, "w") as f:
             json.dump(save, f, indent=4)
-        
+
         with open(save_path.replace(".json", "_history.json"), "w") as f:
             json.dump(run_history, f, indent=4)
-            
-        with open(save_path.replace(".json", "_reasoning.json"), "w") as f:  # Save reasoning traces
+
+        with open(
+            save_path.replace(".json", "_reasoning.json"), "w"
+        ) as f:  # Save reasoning traces
             json.dump(run_reasoning, f, indent=4)
