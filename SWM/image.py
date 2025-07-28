@@ -35,7 +35,7 @@ class SWMImage:
 
 
         # Randomize box
-        for i in range(num_boxes):
+        for i in range(self.num_boxes):
             while True:
                 x = random.randint(0, x_max // self.box_width - 1)
                 y = random.randint(0, y_max // self.box_width - 1)
@@ -64,7 +64,7 @@ class SWMImage:
         if box_coord not in self.box_coords:
             return self.base_img
         
-        box = get_box_id(box_coord)
+        box = self.get_box_id(box_coord)
         box_center = self._convert_grid_to_coords(*box_coord)
         new_img = self.base_img.copy()
         draw = ImageDraw.Draw(new_img)
