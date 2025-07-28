@@ -171,5 +171,9 @@ cython_debug/
 .pypirc
 
 data*/
+/SWM/images/
+/WCST/images/
 wcst_data*/
 viz.ipynb
+api_calc.ipynb
+*.sh

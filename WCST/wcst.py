@@ -5,8 +5,8 @@ from tqdm.auto import tqdm
 
 import json, argparse, random, time, os, re
 
-from utils import generate_few_shot, wcst_generator, string_generator
-from model_wrapper import ModelWrapper
+from .utils import generate_few_shot, wcst_generator, string_generator
+from ..shared.model_wrapper import ModelWrapper
 
 wcst_prompt = """You are performing the Wisconsin Card Sorting Test (WCST).
 You will be shown a given card with a symbol on it, and you will have to match it to one of four option cards according to an attribute that you have to figure out.
@@ -69,35 +69,34 @@ Your final answer should be a number between 1-4 corresponding to the index of t
 
 """
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="llama")
-    parser.add_argument("--variant", type=str, default="card")
-    parser.add_argument("--max_trials", type=int, default=64)
-    parser.add_argument("--num_correct", type=int, default=5)
-    parser.add_argument("--repeats", type=int, default=1)
-    parser.add_argument("--few_shot", action="store_true")
-    parser.add_argument("--cot", action="store_true")
-    parser.add_argument("--hint", action="store_true")
-    parser.add_argument("--model_source", type=str, default="hf", help="The source of the model.")
-    parser.add_argument("--max_tokens", type=int, default=512, help="The maximum number of tokens to generate.")
-    parser.add_argument("--think_budget", type=int, default=64, help="The budget tokens for reasoning.")
-    parser.add_argument("--api_key", type=str, default=None, help="API key to use. If none, uses key stored in environment variable.")
-    parser.add_argument("--verbose", type=int, default=15)
-    
-    args = parser.parse_args()
-    variant = args.variant
-    max_trials = args.max_trials
-    num_correct = args.num_correct
-    few_shot = args.few_shot
-    cot = args.cot
 
+
+def run_wcst(model="llama", variant="card", max_trials=64, num_correct=5, repeats=1, 
+             few_shot=False, cot=False, hint=False, model_source="hf", max_tokens=512, 
+             think_budget=64, api_key=None, verbose=15):
+    """
+    Run the Wisconsin Card Sorting Test (WCST).
+    
+    Args:
+        model: The model to use
+        variant: The variant of the test ("card", "card-random", "string", "empty")
+        max_trials: Maximum number of trials
+        num_correct: Number of correct answers required per category
+        repeats: Number of runs to perform
+        few_shot: Whether to use few-shot prompting
+        cot: Whether to use chain-of-thought reasoning
+        hint: Whether to provide hints
+        model_source: The source of the model ("hf", "google", "litellm", "vllm")
+        max_tokens: Maximum number of tokens to generate
+        think_budget: Budget tokens for reasoning
+        api_key: API key to use
+        verbose: Verbosity level
+    """
     print(f"few_shot: {few_shot}")
 
-    if not os.path.isdir("wcst_data"):
-        os.mkdir("wcst_data")
+    os.makedirs(os.path.join("WCST", "data"), exist_ok=True)
 
-    save_path = f"wcst_data/{args.model_source}_{args.model.replace('/', '-')}_{variant}_{max_trials}-{num_correct}.json"
+    save_path = os.path.join("WCST", "data", f"{model_source}_{model.replace('/', '-')}_{variant}_{max_trials}-{num_correct}.json")
 
     if few_shot and cot:
         save_path = save_path.replace(".json", "_few_shot_cot.json")
@@ -127,7 +126,7 @@ if __name__ == "__main__":
             print(f"Completed categories: {completed_categories}")
             print(f"Total number of trials: {total_trials}")
             print(f"Total accuracy: {total_correct/total_trials:.3f}")
-        exit(0)
+        return
 
     if variant == "card":
         system_prompt = wcst_prompt
@@ -150,7 +149,7 @@ if __name__ == "__main__":
         system_prompt += generate_few_shot(variant)
 
     if cot:
-        system_prompt += f"Explain your thought process regarding the problem and the feedbacks you received in maximum {args.think_budget} tokens wrapped with <think> and </think>. Then, provide a really short summary of your reasoning after the closing </think> tag.\n"
+        system_prompt += f"Explain your thought process regarding the problem and the feedbacks you received in maximum {think_budget} tokens wrapped with <think> and </think>. Then, provide a really short summary of your reasoning after the closing </think> tag.\n"
     else:
         system_prompt += "Answer only with your final answer.\n"
     system_prompt += """State your final answer using the template: "<answer>your answer</answer>"\n"""
@@ -159,13 +158,13 @@ if __name__ == "__main__":
     run_history = {}
     run_reasoning = {}  # Add new dictionary for reasoning traces
     
-    for rep in range(args.repeats):
-        model = None
+    for rep in range(repeats):
+        model_instance = None
         torch.cuda.empty_cache()
         save_rep = []
 
-        model = ModelWrapper(args.model, args.model_source, api_key=args.api_key, max_new_tokens=args.max_tokens)
-        model.init_chat(system_prompt)
+        model_instance = ModelWrapper(model, model_source, api_key=api_key, max_new_tokens=max_tokens)
+        model_instance.init_chat(system_prompt)
 
         n_trials = 0
         completed_cat = 0
@@ -202,7 +201,7 @@ if __name__ == "__main__":
                                 test_prompt = f"""Given: {given}\nOptions:\n1. {opt[0]}\n2. {opt[1]}\n3. {opt[2]}\n4. {opt[3]}"""
                             
                             # Add hint
-                            if args.hint:
+                            if hint:
                                 test_prompt += f"\nRule: {rule}"
 
                             correct = False
@@ -212,7 +211,7 @@ if __name__ == "__main__":
                                 trial_bar.update(1)
             
                                 n_trials += 1
-                                response = model.send_message(correct_prefix + test_prompt, truncate_history=True, cot=cot)
+                                response = model_instance.send_message(correct_prefix + test_prompt, truncate_history=True, cot=cot)
                                 ans = re.search(r"<answer>(?s:.*)</answer>", response)
                                 if ans:
                                     ans = re.search(r"<answer>(?s:.*)</answer>", response)[0]
@@ -258,8 +257,8 @@ if __name__ == "__main__":
         print(f"Total accuracy: {total_correct/n_trials}")
     
         save[f"run_{rep+1}"] = save_rep
-        run_history[f"run_{rep+1}"] = model.history
-        run_reasoning[f"run_{rep+1}"] = model.reasoning_trace  # Save reasoning trace
+        run_history[f"run_{rep+1}"] = model_instance.history
+        run_reasoning[f"run_{rep+1}"] = model_instance.reasoning_trace  # Save reasoning trace
 
         with open(save_path, "w") as f:
             json.dump(save, f, indent=4)
