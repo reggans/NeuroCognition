@@ -151,48 +151,70 @@ class ModelWrapper:
         else:
             self.history.append({"role": "user", "content": message})
 
-        extra_body = {}
-        if self.model_source == "vllm":
-            extra_body = {
-                "chat_template_kwargs": {"enable_thinking": bool(cot)},
-            }
-        elif self.model_source == "openrouter":
-            if cot:
-                extra_body = {"reasoning": {"exclude": False}}
-                if "grok" not in self.model_name:
-                    extra_body["reasoning"]["max_tokens"] = self.think_budget
+        if self.model_source == "openai":
+            reasoning = None
+            if cot and "o4" in self.model_name:
+                reasoning = {
+                    "effort": "medium",
+                }
+            try:
+                raw_response = self.client.responses.create(
+                    model=self.model_name,
+                    input=self.history,
+                    max_output_tokens=max_new_tokens or self.max_new_tokens,
+                    reasoning=reasoning,
+                )
+                raw_response = raw_response.output_text
+            except:
+                time.sleep(5)
+                raw_response = self.client.responses.create(
+                    model=self.model_name,
+                    input=self.history,
+                    max_output_tokens=max_new_tokens or self.max_new_tokens,
+                    reasoning=reasoning,
+                )
+                raw_response = raw_response.output_text
+        else:
+            extra_body = {}
+            if self.model_source == "vllm":
+                extra_body = {
+                    "chat_template_kwargs": {"enable_thinking": bool(cot)},
+                }
+            elif self.model_source == "openrouter":
+                if cot:
+                    extra_body = {"reasoning": {"exclude": False}}
+                    if "grok" not in self.model_name:
+                        extra_body["reasoning"]["max_tokens"] = self.think_budget
+                    else:
+                        extra_body["reasoning"]["enabled"] = True
                 else:
-                    extra_body["reasoning"]["enabled"] = True
-            else:
-                extra_body = {"reasoning": {"enabled": False}}
-        try:
-            raw_response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=self.history,
-                max_tokens=max_new_tokens or self.max_new_tokens,
-                temperature=0.6,
-                top_p=0.95,
-                extra_body=extra_body,
-            )
-            raw_response = raw_response.choices[0].message.content
-        except:
-            time.sleep(5)
-            raw_response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=self.history,
-                max_tokens=max_new_tokens or self.max_new_tokens,
-                temperature=0.6,
-                top_p=0.95,
-                extra_body=extra_body,
-            )
-            raw_response = raw_response.choices[0].message.content
+                    extra_body = {"reasoning": {"enabled": False}}
+            try:
+                raw_response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=self.history,
+                    max_tokens=max_new_tokens or self.max_new_tokens,
+                    extra_body=extra_body,
+                )
+                raw_response = raw_response.choices[0].message.content
+            except:
+                time.sleep(5)
+                raw_response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=self.history,
+                    max_tokens=max_new_tokens or self.max_new_tokens,
+                    extra_body=extra_body,
+                )
+                raw_response = raw_response.choices[0].message.content
 
         # Add this code after getting raw_response but before updating history
         if cot:
             # Extract reasoning trace from response
             trace = re.search(r"<think>(.*?)</think>", raw_response, re.DOTALL)
             if not trace:
-                trace = re.search(r"<thinking>(.*?)</thinking>", raw_response, re.DOTALL)
+                trace = re.search(
+                    r"<thinking>(.*?)</thinking>", raw_response, re.DOTALL
+                )
             if trace:
                 self.reasoning_trace.append(
                     {"user_message": message, "reasoning": trace.group(1).strip()}
