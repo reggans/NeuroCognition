@@ -203,31 +203,54 @@ class ModelWrapper:
                     extra_body["reasoning"]["enabled"] = True
             else:
                 extra_body = {"reasoning": {"enabled": False}}
-        try:
-            raw_response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=self.history,
-                max_tokens=max_new_tokens or self.max_new_tokens,
-                temperature=0.6,
-                top_p=0.95,
-                extra_body=extra_body,
-            )
-            print(raw_response.choices[0].finish_reason)
-            raw_response = raw_response.choices[0].message.content
-            print(raw_response)
-        except:
-            time.sleep(5)
-            raw_response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=self.history,
-                max_tokens=max_new_tokens or self.max_new_tokens,
-                temperature=0.6,
-                top_p=0.95,
-                extra_body=extra_body,
-            )
-            print(raw_response.choices[0].finish_reason)
-            raw_response = raw_response.choices[0].message.content
-            print(raw_response)
+        if self.model_source == "openai":
+            try:
+                raw_response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=self.history,
+                    max_completion_tokens=max_new_tokens or self.max_new_tokens,
+                    extra_body=extra_body,
+                )
+                print(raw_response.choices[0].finish_reason)
+                raw_response = raw_response.choices[0].message.content
+                print(raw_response)
+            except:
+                time.sleep(5)
+                raw_response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=self.history,
+                    max_completion_tokens=max_new_tokens or self.max_new_tokens,
+                    extra_body=extra_body,
+                )
+                print(raw_response.choices[0].finish_reason)
+                raw_response = raw_response.choices[0].message.content
+                print(raw_response)
+        else:
+            try:
+                raw_response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=self.history,
+                    max_tokens=max_new_tokens or self.max_new_tokens,
+                    temperature=0.6,
+                    top_p=0.95,
+                    extra_body=extra_body,
+                )
+                print(raw_response.choices[0].finish_reason)
+                raw_response = raw_response.choices[0].message.content
+                print(raw_response)
+            except:
+                time.sleep(5)
+                raw_response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=self.history,
+                    max_tokens=max_new_tokens or self.max_new_tokens,
+                    temperature=0.6,
+                    top_p=0.95,
+                    extra_body=extra_body,
+                )
+                print(raw_response.choices[0].finish_reason)
+                raw_response = raw_response.choices[0].message.content
+                print(raw_response)
 
         # Add this code after getting raw_response but before updating history
         if cot:
