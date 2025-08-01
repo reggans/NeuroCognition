@@ -6,8 +6,15 @@ from tqdm.auto import tqdm
 
 import random, json, re, argparse, os
 import string
+import sys
 
-from ..shared.model_wrapper import ModelWrapper
+# Add parent directory to path for imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    from ..shared.model_wrapper import ModelWrapper
+except ImportError:
+    from shared.model_wrapper import ModelWrapper
 from .image import SWMImage
 
 def image_swm(model, n_boxes, n_tokens=1, cot=None, think_budget=64, note_assist=False):
@@ -18,7 +25,7 @@ def image_swm(model, n_boxes, n_tokens=1, cot=None, think_budget=64, note_assist
     task_prompt = f"""You will be performing the Spatial Working Memory task. 
 You will be given an image containing 8 yellow boxes in a grid. 
 One of the boxes contains a red token. 
-Your goal is to find the token 8 times by repeatedly selecting a box to open. 
+Your goal is to find the token 8 times by repeatedly selecting a box to open.
 Once the token is found, another will be generated in another box. 
 The token will be generated in a box that has never contained the token before in the trial. 
 The token may be generated in a box that has been opened and found empty before, as long as it never contained that type of token previously. 
@@ -44,9 +51,10 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
     illegal_guess = 0
     invalid_guess = 0
     repeated_guess = 0
+    nobox_guess = 0
 
-    os.makedirs("images", exist_ok=True)
-    swm_gen = SWMImage("images", n_boxes)
+    os.makedirs("SWM/images", exist_ok=True)
+    swm_gen = SWMImage("SWM/images", n_boxes)
 
     # Start the test
     response = model.send_message(question, cot=cot)
@@ -89,8 +97,8 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                         break
                     
                     # Note-taking assistance
+                    notes = ""
                     if note_assist:
-                        notes = ""
                         for token, legal in legal_boxes.items():
                             notes += f"Boxes that has contained token {token}: "
                             for box in range(1, n_boxes+1):
@@ -111,12 +119,16 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                         chosen_coord = re.search(r"<answer>(?s:.*)</answer>", response)[0]
                         chosen_coord = re.sub(r"<answer>|</answer>", "", chosen_coord).strip()
                         try:
-                            chosen_coord = re.findall(r"[0-9]*", chosen_coord)
+                            chosen_coord = re.findall(r"[0-9]+", chosen_coord)
                             chosen_coord = (int(chosen_coord[0]), int(chosen_coord[1])) 
-                            chosen_box = swm_gen.get_box_id(chosen_coord)
-                        except ValueError:
+                        except IndexError:
                             response = model.send_message(f"Please answer with a valid grid coordinate (x, y).\n" + msg + notes + question, truncate_history=True, cot=cot)
                             invalid_guess += 1
+                        try:
+                            chosen_box = swm_gen.get_box_id(chosen_coord)
+                        except ValueError:
+                            response = model.send_message(f"No box in grid coordinate (x, y).\n" + msg + notes + question, truncate_history=True, cot=cot)
+                            nobox_guess += 1
                             continue
                     else:
                         response = model.send_message(f"Please answer with the specified format\n" + msg + notes + question, truncate_history=True, cot=cot)
@@ -148,9 +160,9 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                     msg = ""
                     if found:
                         for token in found_tokens:
-                            msg = f"Token {token} found in box {chosen_box}.\n" + msg
+                            msg = f"Token {token} found in box {chosen_coord}.\n" + msg
                     else:
-                        msg += f"No tokens found in box {chosen_box}.\n" + msg
+                        msg += f"No tokens found in box {chosen_coord}.\n" + msg
 
                     response = model.send_message(msg + notes + question, truncate_history=True, cot=cot)
                     model.history[-2]["content"] = msg      # Truncate user response length
@@ -161,6 +173,7 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
         "guesses": total_guess,
         "invalid": invalid_guess,
         "repeated": repeated_guess,
+        "nobox": nobox_guess,
     }
 
     return run_stats

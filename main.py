@@ -5,6 +5,11 @@ This script can run either the Wisconsin Card Sorting Test (WCST) or the Spatial
 """
 
 import argparse
+import sys
+import os
+
+# Add the current directory to Python path to allow imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 def main():
     parser = argparse.ArgumentParser(
@@ -40,7 +45,8 @@ Examples:
     wcst_parser.add_argument("--few_shot", action="store_true", help="Use few-shot prompting")
     wcst_parser.add_argument("--cot", action="store_true", help="Use chain-of-thought reasoning")
     wcst_parser.add_argument("--hint", action="store_true", help="Provide hints")
-    wcst_parser.add_argument("--model_source", type=str, default="hf", choices=["hf", "google", "litellm", "vllm"],
+    wcst_parser.add_argument("--image", action="store_true", help="Use image mode")
+    wcst_parser.add_argument("--model_source", type=str, default="vllm", choices=["vllm", "openai", "openrouter"],
                            help="The source of the model")
     wcst_parser.add_argument("--max_tokens", type=int, default=512, help="Maximum number of tokens to generate")
     wcst_parser.add_argument("--think_budget", type=int, default=64, help="Budget tokens for reasoning")
@@ -50,7 +56,7 @@ Examples:
     # SWM parser
     swm_parser = subparsers.add_parser('swm', help='Run Spatial Working Memory test')
     swm_parser.add_argument("--model", type=str, default=None, help="The model to use")
-    swm_parser.add_argument("--model_source", type=str, default="hf", choices=["hf", "google", "litellm", "vllm"],
+    swm_parser.add_argument("--model_source", type=str, default="vllm", choices=["vllm", "openai", "openrouter"],
                           help="The source of the model")
     swm_parser.add_argument("--n_boxes", type=int, default=6, help="Number of boxes in the test (more = harder)")
     swm_parser.add_argument("--n_tokens", type=int, default=1, 
@@ -67,33 +73,78 @@ Examples:
     
     # Import and run the appropriate test
     if args.test == 'wcst':
-        from WCST.wcst import run_wcst
-        
-        print("Running Wisconsin Card Sorting Test (WCST)")
-        print(f"Model: {args.model} (source: {args.model_source})")
-        print(f"Variant: {args.variant}")
-        print(f"Settings: max_trials={args.max_trials}, num_correct={args.num_correct}, repeats={args.repeats}")
-        print(f"Options: few_shot={args.few_shot}, cot={args.cot}, hint={args.hint}")
-        print("-" * 50)
-        
-        run_wcst(
-            model=args.model,
-            variant=args.variant,
-            max_trials=args.max_trials,
-            num_correct=args.num_correct,
-            repeats=args.repeats,
-            few_shot=args.few_shot,
-            cot=args.cot,
-            hint=args.hint,
-            model_source=args.model_source,
-            max_tokens=args.max_tokens,
-            think_budget=args.think_budget,
-            api_key=args.api_key,
-            verbose=args.verbose
-        )
+        if args.image:
+            try:
+                from WCST.wcst import run_wcst_image
+            except ImportError:
+                # Try absolute import if relative fails
+                import sys
+                import os
+                sys.path.append(os.path.dirname(__file__))
+                from WCST.wcst import run_wcst_image
+            
+            print("Running Wisconsin Card Sorting Test (WCST) - Image Mode")
+            print(f"Model: {args.model} (source: {args.model_source})")
+            print(f"Settings: max_trials={args.max_trials}, num_correct={args.num_correct}, repeats={args.repeats}")
+            print(f"Options: few_shot={args.few_shot}, cot={args.cot}, hint={args.hint}, image={args.image}")
+            print("-" * 50)
+            
+            run_wcst_image(
+                model=args.model,
+                max_trials=args.max_trials,
+                num_correct=args.num_correct,
+                repeats=args.repeats,
+                few_shot=args.few_shot,
+                cot=args.cot,
+                hint=args.hint,
+                model_source=args.model_source,
+                max_tokens=args.max_tokens,
+                think_budget=args.think_budget,
+                api_key=args.api_key,
+                verbose=args.verbose
+            )
+        else:
+            try:
+                from WCST.wcst import run_wcst
+            except ImportError:
+                # Try absolute import if relative fails
+                import sys
+                import os
+                sys.path.append(os.path.dirname(__file__))
+                from WCST.wcst import run_wcst
+            
+            print("Running Wisconsin Card Sorting Test (WCST)")
+            print(f"Model: {args.model} (source: {args.model_source})")
+            print(f"Variant: {args.variant}")
+            print(f"Settings: max_trials={args.max_trials}, num_correct={args.num_correct}, repeats={args.repeats}")
+            print(f"Options: few_shot={args.few_shot}, cot={args.cot}, hint={args.hint}")
+            print("-" * 50)
+            
+            run_wcst(
+                model=args.model,
+                variant=args.variant,
+                max_trials=args.max_trials,
+                num_correct=args.num_correct,
+                repeats=args.repeats,
+                few_shot=args.few_shot,
+                cot=args.cot,
+                hint=args.hint,
+                model_source=args.model_source,
+                max_tokens=args.max_tokens,
+                think_budget=args.think_budget,
+                api_key=args.api_key,
+                verbose=args.verbose
+            )
         
     elif args.test == 'swm':
-        from SWM.main import swm_main
+        try:
+            from SWM.main import swm_main
+        except ImportError:
+            # Try absolute import if relative fails
+            import sys
+            import os
+            sys.path.append(os.path.dirname(__file__))
+            from SWM.main import swm_main
         
         print("Running Spatial Working Memory (SWM) test")
         print(f"Model: {args.model} (source: {args.model_source})")

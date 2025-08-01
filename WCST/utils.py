@@ -9,7 +9,7 @@ def wcst_generator(rule, randomize=False):
     options = [{"number": "one", "color": "red", "shape": "circle"},
                {"number": "two", "color": "green", "shape": "triangle"},
                {"number": "three", "color": "blue", "shape": "star"},
-               {"number": "four", "color": "yellow", "shape": "cross"},
+               {"number": "four", "color": "yellow", "shape": "square"},
                ]
     
     ans = random.choice(options)

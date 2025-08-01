@@ -13,6 +13,7 @@ class SWMImage:
         self.n_boxes = n_boxes
         self.box_coords = []
         self.save_path = save_path
+        self.padding = 5  # Padding to make boxes smaller than grid cells
 
         x_max, y_max = img_size
         font_size = 15
@@ -35,7 +36,7 @@ class SWMImage:
 
 
         # Randomize box
-        for i in range(self.num_boxes):
+        for i in range(self.n_boxes):
             while True:
                 x = random.randint(0, x_max // self.box_width - 1)
                 y = random.randint(0, y_max // self.box_width - 1)
@@ -51,9 +52,9 @@ class SWMImage:
         self.base_img.save(os.path.join(self.save_path, 'current.png'))
 
     def _draw_box(self, box_center):
-        self.base_draw.rectangle((box_center[0] - self.box_width/2, box_center[1] - self.box_width/2,
-                        box_center[0] + self.box_width/2, box_center[1] + self.box_width/2),
-                        fill='yellow')
+        self.base_draw.rectangle((box_center[0] - self.box_width/2 + self.padding, box_center[1] - self.box_width/2 + self.padding,
+                        box_center[0] + self.box_width/2 - self.padding, box_center[1] + self.box_width/2 - self.padding),
+                        fill='yellow', outline='black', width=2)
 
     def _convert_grid_to_coords(self, grid_x, grid_y):
         x = grid_x * self.box_width + self.box_width / 2 + self.margin
@@ -69,13 +70,17 @@ class SWMImage:
         new_img = self.base_img.copy()
         draw = ImageDraw.Draw(new_img)
         
-        draw.rectangle((box_center[0] - self.box_width/2 + 5, box_center[1] - self.box_width/2 + 5,
-                            box_center[0] + self.box_width/2 - 5, box_center[1] + self.box_width/2 - 5),
+        # Draw the opened box (black interior) with same padding as original boxes
+        hole_padding = self.padding + 5
+        draw.rectangle((box_center[0] - self.box_width/2 + hole_padding, box_center[1] - self.box_width/2 + hole_padding,
+                            box_center[0] + self.box_width/2 - hole_padding, box_center[1] + self.box_width/2 - hole_padding),
                             fill='black')
 
         if token == box:
-            draw.rectangle((box_center[0] - self.box_width/2 + 15, box_center[1] - self.box_width/2 + 15,
-                            box_center[0] + self.box_width/2 - 15, box_center[1] + self.box_width/2 - 15),
+            # Draw the red token smaller inside the opened box
+            token_padding = self.padding + 10
+            draw.rectangle((box_center[0] - self.box_width/2 + token_padding, box_center[1] - self.box_width/2 + token_padding,
+                            box_center[0] + self.box_width/2 - token_padding, box_center[1] + self.box_width/2 - token_padding),
                             fill='red')
         
         new_img.save(os.path.join(self.save_path, f'current.png'))
