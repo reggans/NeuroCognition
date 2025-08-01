@@ -1,14 +1,7 @@
-# import google.generativeai as genai
-import google
 import openai
-import transformers
-from huggingface_hub import login
-from openai import OpenAI
-# from vllm import LLM
-import torch
-from tqdm.auto import tqdm
 
 import os, time, re
+import base64
 
 import json
 from typing import List, Dict
@@ -16,261 +9,271 @@ from typing import List, Dict
 def validate_message_turns(messages: List[Dict], save_error: bool = True) -> bool:
     """
     Validates that messages alternate properly between user and assistant/model roles.
-    
+
     Args:
         messages: List of message dictionaries with 'role' and 'content'
         save_error: Whether to save invalid messages to error.json
-    
+
     Returns:
         bool: True if messages alternate properly, False otherwise
     """
     if not messages:
         return True
-        
+
     # Skip system message if present
     start_idx = 0
     if messages[0]["role"] == "system":
         start_idx = 1
-        
-    for i in range(start_idx, len(messages)-1):
+
+    for i in range(start_idx, len(messages) - 1):
         current_role = messages[i]["role"]
-        next_role = messages[i+1]["role"]
-        
+        next_role = messages[i + 1]["role"]
+
         # Check if same role appears consecutively
         if current_role == next_role:
             if save_error:
                 error_info = {
                     "error": "Non-alternating message turns detected",
                     "position": i,
-                    "messages": messages
+                    "messages": messages,
                 }
                 with open("error.json", "w") as f:
                     json.dump(error_info, f, indent=2)
             return False
-            
+
         # Verify valid role pairs
         valid_pairs = {
             "user": ["assistant", "model"],
             "assistant": ["user"],
-            "model": ["user"]
+            "model": ["user"],
         }
-        
+
         if next_role not in valid_pairs.get(current_role, []):
             if save_error:
                 error_info = {
                     "error": f"Invalid role sequence: {current_role} -> {next_role}",
                     "position": i,
-                    "messages": messages
+                    "messages": messages,
                 }
                 with open("error.json", "w") as f:
                     json.dump(error_info, f, indent=2)
             return False
-            
+
     return True
 
-class ModelWrapper():
-    def __init__(self, model_name, model_source, api_key=None, max_new_tokens=512, image_input=False, image_path=None):
+
+def encode_image_to_base64(image_path: str) -> str:
+    """
+    Encode an image file to base64 string with proper data URL format.
+    
+    Args:
+        image_path: Path to the image file
+        
+    Returns:
+        str: Base64 encoded image as data URL (data:image/png;base64,...)
+    """
+    try:
+        with open(image_path, "rb") as image_file:
+            # Read the image file
+            image_data = image_file.read()
+            # Encode to base64
+            base64_string = base64.b64encode(image_data).decode('utf-8')
+            # Determine the image format from file extension
+            file_extension = os.path.splitext(image_path)[1].lower()
+            if file_extension == '.png':
+                mime_type = 'image/png'
+            elif file_extension in ['.jpg', '.jpeg']:
+                mime_type = 'image/jpeg'
+            elif file_extension == '.gif':
+                mime_type = 'image/gif'
+            elif file_extension == '.webp':
+                mime_type = 'image/webp'
+            else:
+                # Default to png if unknown
+                mime_type = 'image/png'
+            
+            # Return as data URL
+            return f"data:{mime_type};base64,{base64_string}"
+    except Exception as e:
+        raise ValueError(f"Failed to encode image {image_path}: {str(e)}")
+
+
+class ModelWrapper:
+    def __init__(
+        self,
+        model_name,
+        model_source,
+        api_key=None,
+        max_new_tokens=512,
+        think_budget=256,
+        image_input=False,
+        image_path=None,
+    ):
         if image_input:
             if image_path is None:
                 raise ValueError("Image path must be provided")
-            if model_source not in ["litellm", "vllm"]:
+            if model_source not in ["vllm", "openai", "openrouter"]:
                 raise NotImplementedError
 
-        self.chat = None # Specific to Gemini API, None otherwise
-        self.client = None # Specific to LiteLLM API, None otherwise
+        self.chat = None
+        self.client = None
         self.history = None
         self.model_name = model_name
         self.model_source = model_source
         self.max_new_tokens = max_new_tokens
+        self.think_budget = think_budget
         self.image_input = image_input
         self.image_path = image_path
         self.reasoning_trace = []  # Add new private attribute
 
-        # Gemini API
-        if model_source == "google":
-            if api_key is None:
-                if os.getenv("GOOGLE_API_KEY") is not None:
-                    api_key = os.getenv("GOOGLE_API_KEY")
-                else:
-                    raise ValueError("Please set the GOOGLE_API_KEY environment variable or pass it to the CLI.")
-            # genai.configure(api_key=api_key)
-
-            # self.model = genai.GenerativeModel(model_name)
-            self.tokenizer = None
-        # Get model from Hugging Face
-        elif model_source == "hf":
-            if api_key is None:
-                if os.getenv("HF_TOKEN") is not None:
-                    api_key = os.getenv("HF_TOKEN") 
-                else:
-                    raise ValueError("Please set the HF_TOKEN environment variable or pass it to the CLI.")
-            login(token=api_key)
-
-            self.model = transformers.AutoModelForCausalLM.from_pretrained(model_name,
-                                                                           torch_dtype="auto",
-                                                                           device_map="auto")
-            self.tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
-        # LiteLLM API
-        elif model_source == "litellm":
-            if api_key is None:
-                if os.getenv("LITELLM_API_KEY") is not None:
-                    api_key = os.getenv("LITELLM_API_KEY")
-                else:
-                    raise ValueError("Please set the LITELLM_API_KEY environment variable or pass it to the CLI.")
+        if model_source in ["openai", "openrouter", "vllm"]:
+            if model_source == "vllm":
+                api_key = "dummy"  # VLLM doesn't need a real API key
+                base_url = f"http://{os.getenv('VLLM_URL')}:8877/v1"
+            else:
+                if api_key is None:
+                    api_key = os.getenv("OPENAI_API_KEY") or os.getenv(
+                        "OPENROUTER_API_KEY"
+                    )
+                    if api_key is None:
+                        raise ValueError(
+                            "Please set the OPENAI_API_KEY or OPENROUTER_API_KEY environment variable or pass it to the CLI."
+                        )
+                base_url = None
+                if model_source == "openrouter":
+                    base_url = "https://openrouter.ai/api/v1"
 
             self.client = openai.OpenAI(
                 api_key=api_key,
-                base_url = "REMOVED"
-            )
-        # VLLM API
-        elif model_source == "vllm":
-            vllm_url = f"http://{os.getenv('VLLM_URL')}:8877/v1"
-            self.client = OpenAI(
-                base_url=vllm_url,
-                api_key="dummy"  # VLLM doesn't need real API key
-            )
-            self.model_name = model_name
-    
-    def init_chat(self, task_prompt):
-        if self.model_source == "google":
-            # Initialize history
-            self.history = [
-                {"role": "user", "content": task_prompt},
-                {"role": "model", "content": "Understood, lets start."},
-            ]
-            
-            # Start Gemini chat
-            self.chat = self.model.start_chat(
-                history = self.history,
+                base_url=base_url,
             )
         else:
-            self.history = [
-                {"role": "system", "content": task_prompt},
-            ]
-        
+            raise ValueError(
+                "Unsupported model source. Supported sources are: openai, openrouter, vllm."
+            )
+
+    def init_chat(self, task_prompt):
+        self.history = [
+            {"role": "system", "content": task_prompt},
+        ]
         self.reasoning_trace = []  # Reset reasoning trace when starting new chat
-        
-    def send_message(self, message, max_new_tokens=None, truncate_history=False, cot=False):
+
+    def send_message(
+        self, message, max_new_tokens=None, truncate_history=False, cot=False
+    ):
         if not validate_message_turns(self.history):
-            raise ValueError("Invalid message turn sequence detected. Check error.json for details.")
+            raise ValueError(
+                "Invalid message turn sequence detected. Check error.json for details."
+            )
 
         # Store original response
         raw_response = None
-        
+
         if self.image_input:
+            image_file_path = os.path.join(self.image_path, "current.png")
+            base64_image = encode_image_to_base64(image_file_path)
             self.history.append(
-                {"role": "user", 
-                "content": [
-                    {"type": "text", "text": message},
-                    {"type": "image_url", "image_url": {"url": os.path.join(self.image_path, "current.png")}}]}
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": message},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": base64_image
+                            },
+                        },
+                    ],
+                }
             )
         else:
-            self.history.append(
-                {"role": "user", "content": message}
+            self.history.append({"role": "user", "content": message})
+
+        extra_body = {}
+        if self.model_source == "vllm":
+            extra_body = {
+                "chat_template_kwargs": {"enable_thinking": bool(cot)},
+            }
+        elif self.model_source == "openrouter":
+            if cot:
+                extra_body = {"reasoning": {"exclude": False}}
+                if "grok" not in self.model_name:
+                    extra_body["reasoning"]["max_tokens"] = self.think_budget
+                else:
+                    extra_body["reasoning"]["enabled"] = True
+            else:
+                extra_body = {"reasoning": {"enabled": False}}
+        try:
+            raw_response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=self.history,
+                max_tokens=max_new_tokens or self.max_new_tokens,
+                temperature=0.6,
+                top_p=0.95,
+                extra_body=extra_body,
             )
-        
-
-        if self.model_source == "google":
-            try:
-                raw_response = self.chat.send_message(message).text
-            except google.api_core.exceptions.ResourceExhausted:
-                time.sleep(60)
-                raw_response = self.chat.send_message(message).text
-
-        elif self.model_source == "hf":
-            if max_new_tokens is None:
-                max_new_tokens = self.max_new_tokens
-                
-            for i in range(3):
-                if re.search(r"<answer>(?s:.*)</answer>", raw_response) is not None:
-                    break
-                # Continue answer
-                text = self.tokenizer.apply_chat_template(
-                    self.history,
-                    tokenize=False,
-                    continue_final_message=True
-                )
-
-                model_inputs = self.tokenizer([text], 
-                                              return_tensors="pt",
-                                              truncation=True, 
-                                              max_length=120000).to(self.model.device)
-                generated_ids = self.model.generate(
-                    **model_inputs,
-                    max_new_tokens=max_new_tokens,
-                    do_sample=True,
-                )
-                generated_ids = [
-                    output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-                ]
-                raw_response += self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-
-            tqdm.write(raw_response)
-            
-            model_inputs = None 
-            generated_ids = None
-            torch.cuda.empty_cache()
-        
-        elif self.model_source in ["litellm", "vllm"]:
-            try:
-                raw_response = self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=self.history,
-                    max_tokens=max_new_tokens or self.max_new_tokens,
-                    extra_body={
-                        "chat_template_kwargs": {"enable_thinking": bool(cot)},
-                    },
-                )
-            except:
-                time.sleep(5)
-                raw_response = self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=self.history,
-                    max_tokens=max_new_tokens or self.max_new_tokens,
-                    extra_body={
-                        "chat_template_kwargs": {"enable_thinking": bool(cot)},
-                    },
-                )
+            print(raw_response.choices[0].finish_reason)
             raw_response = raw_response.choices[0].message.content
+            print(raw_response)
+        except:
+            time.sleep(5)
+            raw_response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=self.history,
+                max_tokens=max_new_tokens or self.max_new_tokens,
+                temperature=0.6,
+                top_p=0.95,
+                extra_body=extra_body,
+            )
+            print(raw_response.choices[0].finish_reason)
+            raw_response = raw_response.choices[0].message.content
+            print(raw_response)
 
         # Add this code after getting raw_response but before updating history
         if cot:
             # Extract reasoning trace from response
             trace = re.search(r"<think>(.*?)</think>", raw_response, re.DOTALL)
+            if not trace:
+                trace = re.search(r"<thinking>(.*?)</thinking>", raw_response, re.DOTALL)
             if trace:
-                self.reasoning_trace.append({
-                    "user_message": message,
-                    "reasoning": trace.group(1).strip()
-                })
+                self.reasoning_trace.append(
+                    {"user_message": message, "reasoning": trace.group(1).strip()}
+                )
             else:
-                self.reasoning_trace.append({
-                    "user_message": message,
-                    "reasoning": raw_response.strip()
-                })
+                self.reasoning_trace.append(
+                    {"user_message": message, "reasoning": raw_response.strip()}
+                )
 
         # Parse response
         if truncate_history:
-            # Remove reasoning trace and get content after </think>
+            # Remove reasoning trace and get content after </think> or </thinking>
             parsed = re.search(r"</think>(.*?)$", raw_response, re.DOTALL)
+            if not parsed:
+                parsed = re.search(r"</thinking>(.*?)$", raw_response, re.DOTALL)
             if parsed:
-                response = parsed.group(1).strip()
+                response = parsed.group().strip()
             else:
-                 # If no closing </think> tag found, limit to last 256 words
+                # If no closing tag found, limit to last 256 words
                 words = raw_response.split()
-                response = ' '.join(words[-256:]).strip()
-        
-        # Update history based on model source
-        if self.model_source == "google":
-            self.history.extend([
-                {"role": "user", "content": message},
-                {"role": "model", "content": response if truncate_history else raw_response or response}
-            ])
-        elif self.model_source == "hf":
-            if response:  
-                self.history.append({"role": "model", "content": response if truncate_history else raw_response or response})
-            else:
-                self.history.append({"role": "model", "content": response})
-        elif self.model_source in ["litellm", "vllm"]:
-            self.history.append({"role": "assistant", "content": response if truncate_history else raw_response or response})
+                response = " ".join(words[-256:]).strip()
+
+            # Additional truncation for qwen3 models: remove <step>, <reasoning>, <conclusion> tags and their content
+            if "qwen3" in self.model_name:
+                # Remove <step>...</step>, <reasoning>...</reasoning>, <conclusion>...</conclusion> (including tags)
+                response = re.sub(r"<step>.*?</step>", "", response, flags=re.DOTALL)
+                response = re.sub(
+                    r"<reasoning>.*?</reasoning>", "", response, flags=re.DOTALL
+                )
+                response = re.sub(
+                    r"<conclusion>.*?</conclusion>", "", response, flags=re.DOTALL
+                )
+                response = response.strip()
+
+        self.history.append(
+            {
+                "role": "assistant",
+                "content": (response if truncate_history else raw_response or response),
+            }
+        )
 
         return raw_response

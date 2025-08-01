@@ -44,7 +44,7 @@ def score(file_path):
         "failure_set": []
     }
 
-    for trial in data:
+    for trial in data.values():
         correct_rule = ""
         perserverated_response = -1
         first_complete = False
@@ -57,6 +57,7 @@ def score(file_path):
         total_correct = 0
 
         for i, query in enumerate(trial):
+            # Check if the rule has changed
             if correct_rule != query["rule"] and correct_rule != "":
                 perserverated_response = -1
                 correct_run = 0
@@ -66,6 +67,7 @@ def score(file_path):
                     first_complete = True
                     scores["first_cat_trials"].append(i+1)
 
+            correct_rule = query["rule"]
             if query["correct"]:
                 total_correct += 1
                 correct_run += 1

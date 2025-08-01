@@ -6,8 +6,15 @@ from tqdm.auto import tqdm
 
 import random, json, re, argparse, os
 import string
+import sys
 
-from ..shared.model_wrapper import ModelWrapper
+# Add parent directory to path for imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    from ..shared.model_wrapper import ModelWrapper
+except ImportError:
+    from shared.model_wrapper import ModelWrapper
 from .swm import image_swm, text_swm, score
 
 def swm_main(model=None, model_source="hf", n_boxes=6, n_tokens=1, cot=False, runs=1, 
@@ -29,19 +36,17 @@ def swm_main(model=None, model_source="hf", n_boxes=6, n_tokens=1, cot=False, ru
         api_key: API key to use
     """
     # Input validation
-    if model_source not in ["hf", "google", "litellm", "vllm"]:
-        raise ValueError("Model source must be either 'hf', 'google', 'litellm', or 'vllm'.")
+    if model_source not in ["openai", "openrouter", "vllm"]:
+        raise ValueError("Model source must be either 'openai', 'openrouter', or 'vllm'.")
 
     if model is None:
-        if model_source == "hf":
-            model = "unsloth/Meta-Llama-3.1-8B-Instruct"
-        elif model_source == "google":
-            model = "gemini-1.5-flash-8b"
-        elif model_source == "litellm":
-            model = "gpt-4o-mini-2024-07-18"
-        elif model_source == "vllm":
-            model = "meta-llama/Llama-2-7b-chat-hf"
-    
+        if model_source == "vllm":
+            model = "Qwen/Qwen3-32B"
+        elif model_source == "openai":
+            model = "o4-mini-2025-04-16"
+        elif model_source == "openrouter":
+            model = "qwen/qwen3-235b-a22b-07-25"
+
     if image:
         if notes:
             os.makedirs("SWM/data/image/baselines", exist_ok=True)
