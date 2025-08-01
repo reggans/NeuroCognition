@@ -342,4 +342,4 @@ def score(run_stats):
     Returns:
         float: The score.
     """
-    return 1 - (run_stats['illegal'] + run_stats['repeated']) / (run_stats['guesses'] - run_stats['invalid'])
+    return 1 - (run_stats['illegal'] + run_stats['repeated'] + run_stats['nobox']) / (run_stats['guesses'] - run_stats['invalid'])
