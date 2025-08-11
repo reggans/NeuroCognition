@@ -1,26 +1,39 @@
-import torch
+#!/usr/bin/env python3
+"""
+Main script to run cognitive evaluation tests.
+Supports:
+- Wisconsin Card Sorting Test (WCST)
+- Spatial Working Memory (SWM)
+
+This file merged legacy SWM runner and new orchestrator. The legacy SWM run/score
+functions moved into run_swm / score for backward compatibility.
+"""
+
+import argparse
+import sys
+import os
+import random, json, re, string
 import numpy as np
+import torch
 from tqdm.auto import tqdm
 
-import random, json, re, argparse, os
-import string
+# Add the current directory to Python path to allow imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from model_wrapper import ModelWrapper
-from swm import image_swm
+try:
+    from model_wrapper import ModelWrapper
+except ImportError:
+    from .model_wrapper import ModelWrapper  # type: ignore
 
+try:
+    from swm import image_swm  # legacy image mode
+except Exception:
+    image_swm = None  # type: ignore
+
+# ---------------- Legacy SWM implementation (from HEAD) ---------------- #
 
 def run_swm(model, n_boxes, n_tokens=1, cot=None, think_budget=64, note_assist=False):
-    """
-    Run the Spatial Working Memory (SWM) test with the given model.
-    Args:
-        model (ModelWrapper): The model to use.
-        n_boxes (int): The number of boxes in the test.
-        cot (str): The type of CoT to use. Either "implicit" or "explicit".
-        verbose (bool): Whether to print verbose output.
-    Returns:
-        dict: The run statistics.
-    """
-    # Initiate w/ task prompt
+    """Run the (text) Spatial Working Memory (SWM) test with the given model."""
     task_prompt = f"""You will be performing a text version of the Spatial Working Memory (SWM) test.
 There are {n_tokens} types of tokens, hidden in any one of {n_boxes} boxes.
 Your goal is to find the {n_tokens} types of tokens {n_boxes} times each, by repeatedly selecting a box to open.
@@ -33,145 +46,112 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
 """
     model.init_chat(task_prompt)
 
-    # Configure the question presented each turn and CoT prompt
     if cot is not None:
-        cot_prompt = f"Think step-by-step, utilizing information from previous feedbacks, and state your reasoning in maximum {think_budget} tokens, wrapped with <think> and </think>. After the closing </think> tag, provide a really short summary of your reasoning and your final answer.\n"
-        question = f"Answer concisely. {cot_prompt}Which of the {n_boxes} boxes would you like to open?\nYour final answer should be a box number, wrapped with <answer> and </answer>"
+        cot_prompt = (
+            f"Think step-by-step, utilizing information from previous feedbacks, and state your reasoning in maximum {think_budget} tokens, "
+            "wrapped with <think> and </think>. After </think>, give a short summary and final answer.\n"
+        )
+        question = (
+            f"Answer concisely. {cot_prompt}Which of the {n_boxes} boxes would you like to open?\n"
+            f"Your final answer should be a box number, wrapped with <answer> and </answer>"
+        )
     else:
-        question = f"Answer only with your final answer. Which of the {n_boxes} boxes would you like to open?\nYour final answer should be a box number, wrapped with <answer> and </answer>"
+        question = (
+            f"Answer only with your final answer. Which of the {n_boxes} boxes would you like to open?\n"
+            f"Your final answer should be a box number, wrapped with <answer> and </answer>"
+        )
 
-    # Initialize run statistics & variables
     tokens = [string.ascii_uppercase[x] for x in range(n_tokens)]
-    legal_boxes = dict.fromkeys(tokens)
-    for token in tokens:
-        legal_boxes[token] = [x for x in range(1, n_boxes + 1)]
+    legal_boxes = {t: [x for x in range(1, n_boxes + 1)] for t in tokens}
 
-    worst_case_n = n_boxes**2
-    total_guess = 0
-    illegal_guess = 0
-    invalid_guess = 0
-    repeated_guess = 0
+    worst_case_n = n_boxes ** 2
+    total_guess = illegal_guess = invalid_guess = repeated_guess = 0
 
-    # Start the test
     response = model.send_message(question, cot=cot, truncate_history=True)
-    with tqdm(total=worst_case_n, desc="Total guesses") as guess_bar:
-        with tqdm(total=n_boxes * n_tokens, desc="Tokens") as token_bar:
-            token_box = dict.fromkeys(tokens)
-            for token in tokens:
+    with tqdm(total=worst_case_n, desc="Total guesses") as guess_bar, tqdm(total=n_boxes * n_tokens, desc="Tokens") as token_bar:
+        token_box = {t: random.choice(legal_boxes[t]) for t in tokens}
+        found_tokens = []
+        while True:
+            for token in found_tokens:
+                if len(legal_boxes[token]) == 0:
+                    continue
                 token_box[token] = random.choice(legal_boxes[token])
-                # tqdm.write(f"Token {token} put in box {token_box[token]}")
+
+            with open("data/temp_history.json", "w") as f:
+                json.dump(model.history, f, indent=4)
+
+            if all(len(legal) == 0 for legal in legal_boxes.values()) or total_guess >= worst_case_n:
+                break
+
+            opened_boxes = set()
             found_tokens = []
-
-            while True:
-                for token in found_tokens:
-                    if len(legal_boxes[token]) == 0:
-                        continue
-                    token_box[token] = random.choice(legal_boxes[token])
-                    # tqdm.write(f"Token {token} put in box {token_box[token]}")
-
-                # Save to temp file
-                with open("data/temp_history.json", "w") as f:
-                    json.dump(model.history, f, indent=4)
-
-                # End test
-                if all([len(legal) == 0 for legal in legal_boxes.values()]):
-                    break
+            found = False
+            while not found:
+                total_guess += 1
+                guess_bar.update(1)
                 if total_guess >= worst_case_n:
                     break
 
-                opened_boxes = set()
-                found_tokens = []
-                found = False
-                while not found:
-                    total_guess += 1
-                    guess_bar.update(1)
-
-                    with open("data/temp_history.json", "w") as f:
-                        json.dump(model.history, f, indent=4)
-
-                    if total_guess >= worst_case_n:
-                        break
-
-                    # Note-taking assistance
-                    notes = ""
-                    if note_assist:
-                        for token, legal in legal_boxes.items():
-                            notes += f"Boxes that has contained token {token}: "
-                            for box in range(1, n_boxes + 1):
-                                if box not in legal:
-                                    notes += f"{box}, "
-                            notes += "\n"
-                        notes += f"Opened boxes: "
-                        for box in opened_boxes:
-                            notes += f"{box}, "
+                notes = ""
+                if note_assist:
+                    for token, legal in legal_boxes.items():
+                        notes += f"Boxes that has contained token {token}: "
+                        for box in range(1, n_boxes + 1):
+                            if box not in legal:
+                                notes += f"{box}, "
                         notes += "\n"
+                    notes += "Opened boxes: " + ", ".join(str(b) for b in opened_boxes) + "\n"
 
-                    msg = ""
-                    for token in tokens:
-                        msg += f"{token} tokens found: {n_boxes - len(legal_boxes[token])}\n"
+                msg = "".join(f"{token} tokens found: {n_boxes - len(legal_boxes[token])}\n" for token in tokens)
 
-                    # Get and validate response
-                    match = re.search(r"<answer>\s*([\s\S]*?)\s*</answer>", response)
-                    if match is not None:
-                        chosen_box = match.group(1).strip()
-                        try:
-                            chosen_box = int(chosen_box)
-                        except ValueError:
-                            response = model.send_message(
-                                f"Please answer with a box number (1-{n_boxes}).\n"
-                                + msg
-                                + notes
-                                + question,
-                                truncate_history=True,
-                                cot=cot,
-                            )
-                            invalid_guess += 1
-                            continue
-                    else:
+                match = re.search(r"<answer>\s*([\s\S]*?)\s*</answer>", response)
+                if match is not None:
+                    chosen_box = match.group(1).strip()
+                    try:
+                        chosen_box = int(chosen_box)
+                    except ValueError:
                         response = model.send_message(
-                            f"Please answer with the specified format\n"
-                            + msg
-                            + notes
-                            + question,
+                            f"Please answer with a box number (1-{n_boxes}).\n" + msg + notes + question,
                             truncate_history=True,
                             cot=cot,
                         )
                         invalid_guess += 1
                         continue
-
-                    legal = False
-                    for legal in legal_boxes.values():
-                        if chosen_box in legal:
-                            legal = True
-                            break
-                    if not legal:
-                        illegal_guess += 1
-                    elif chosen_box in opened_boxes:
-                        repeated_guess += 1
-
-                    opened_boxes.add(chosen_box)
-
-                    for token in tokens:
-                        if chosen_box == token_box[token]:
-                            found = True
-                            token_box[token] = -1
-                            token_bar.update(1)
-                            legal_boxes[token].remove(chosen_box)
-                            found_tokens.append(token)
-
-                    msg = ""
-                    if found:
-                        for token in found_tokens:
-                            msg = f"Token {token} found in box {chosen_box}.\n" + msg
-                    else:
-                        msg += f"No tokens found in box {chosen_box}.\n" + msg
-
+                else:
                     response = model.send_message(
-                        msg + notes + question, truncate_history=True, cot=cot
+                        f"Please answer with the specified format\n" + msg + notes + question,
+                        truncate_history=True,
+                        cot=cot,
                     )
-                    model.history[-2]["content"] = msg  # Truncate user response length
+                    invalid_guess += 1
+                    continue
 
-    run_stats = {
+                legal = any(chosen_box in legal for legal in legal_boxes.values())
+                if not legal:
+                    illegal_guess += 1
+                elif chosen_box in opened_boxes:
+                    repeated_guess += 1
+
+                opened_boxes.add(chosen_box)
+                found = False
+                found_tokens = []
+                for token in tokens:
+                    if chosen_box == token_box[token]:
+                        found = True
+                        token_box[token] = -1
+                        token_bar.update(1)
+                        legal_boxes[token].remove(chosen_box)
+                        found_tokens.append(token)
+
+                if found:
+                    msg = "".join(f"Token {token} found in box {chosen_box}.\n" for token in found_tokens)
+                else:
+                    msg = f"No tokens found in box {chosen_box}.\n"
+
+                response = model.send_message(msg + notes + question, truncate_history=True, cot=cot)
+                model.history[-2]["content"] = msg
+
+    return {
         "worst_case_guesses": worst_case_n,
         "illegal": illegal_guess,
         "guesses": total_guess,
@@ -179,177 +159,136 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
         "repeated": repeated_guess,
     }
 
-    return run_stats
-
-
 def score(run_stats):
-    """
-    Score the run statistics from the SWM test.
-    Args:
-        run_stats (dict): The run statistics.
-    Returns:
-        float: The score.
-    """
-    return 1 - (run_stats["illegal"] + run_stats["repeated"]) / (
-        run_stats["guesses"] - run_stats["invalid"]
-    )
+    return 1 - (run_stats["illegal"] + run_stats["repeated"]) / (run_stats["guesses"] - run_stats["invalid"]) if (run_stats["guesses"] - run_stats["invalid"]) else 0.0
 
+# ---------------- New orchestrator entrypoint (from image branch) ---------------- #
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run the SWM problem.")
-    parser.add_argument("--model", type=str, default=None, help="The model to use.")
-    parser.add_argument(
-        "--model_source", type=str, default="openai", help="The source of the model."
+def orchestrate():  # renamed from main() to avoid confusion
+    parser = argparse.ArgumentParser(
+        description="Run cognitive evaluation tests (WCST or SWM)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python main.py wcst
+  python main.py swm --cot
+  python main.py wcst --model gpt-4 --model_source openai --few_shot
+  python main.py swm --image --runs 5 --n_boxes 8
+        """,
     )
-    parser.add_argument(
-        "--n_boxes",
-        type=int,
-        default=6,
-        help="The number of boxes in the test. More == harder.",
-    )
-    parser.add_argument(
-        "--n_tokens",
-        type=int,
-        default=1,
-        help="The number of different tokens present at the same time. More == harder",
-    )
-    parser.add_argument("--cot", action="store_true")
-    parser.add_argument(
-        "--runs", type=int, default=1, help="The number of runs to perform."
-    )
-    parser.add_argument(
-        "--max_tokens",
-        type=int,
-        default=512,
-        help="The maximum number of tokens to generate.",
-    )
-    parser.add_argument(
-        "--think_budget", type=int, default=64, help="The budget tokens for reasoning."
-    )
-    parser.add_argument("--notes", action="store_true")
-    parser.add_argument("--image", action="store_true")
-    parser.add_argument(
-        "--api_key",
-        type=str,
-        default=None,
-        help="API key to use. If none, uses key stored in environment variable.",
-    )
+    subparsers = parser.add_subparsers(dest="test", required=True)
+
+    wcst_parser = subparsers.add_parser("wcst", help="Run Wisconsin Card Sorting Test")
+    wcst_parser.add_argument("--model", type=str, default="llama")
+    wcst_parser.add_argument("--variant", type=str, default="card", choices=["card", "card-random", "string", "empty"])
+    wcst_parser.add_argument("--max_trials", type=int, default=64)
+    wcst_parser.add_argument("--num_correct", type=int, default=5)
+    wcst_parser.add_argument("--repeats", type=int, default=1)
+    wcst_parser.add_argument("--few_shot", action="store_true")
+    wcst_parser.add_argument("--cot", action="store_true")
+    wcst_parser.add_argument("--hint", action="store_true")
+    wcst_parser.add_argument("--image", action="store_true")
+    wcst_parser.add_argument("--model_source", type=str, default="vllm", choices=["vllm", "openai", "openrouter"])
+    wcst_parser.add_argument("--max_tokens", type=int, default=512)
+    wcst_parser.add_argument("--think_budget", type=int, default=64)
+    wcst_parser.add_argument("--api_key", type=str, default=None)
+    wcst_parser.add_argument("--verbose", type=int, default=15)
+
+    swm_parser = subparsers.add_parser("swm", help="Run Spatial Working Memory test")
+    swm_parser.add_argument("--model", type=str, default=None)
+    swm_parser.add_argument("--model_source", type=str, default="vllm", choices=["vllm", "openai", "openrouter"])
+    swm_parser.add_argument("--n_boxes", type=int, default=6)
+    swm_parser.add_argument("--n_tokens", type=int, default=1)
+    swm_parser.add_argument("--cot", action="store_true")
+    swm_parser.add_argument("--runs", type=int, default=1)
+    swm_parser.add_argument("--max_tokens", type=int, default=512)
+    swm_parser.add_argument("--think_budget", type=int, default=64)
+    swm_parser.add_argument("--notes", action="store_true")
+    swm_parser.add_argument("--image", action="store_true")
+    swm_parser.add_argument("--api_key", type=str, default=None)
+
     args = parser.parse_args()
 
-    # Input validation
-    if args.model_source not in ["vllm", "openai", "openrouter"]:
-        raise ValueError(
-            "Model source must be either 'vllm', 'openai', or 'openrouter'."
-        )
-
-    if args.model is None:
-        if args.model_source == "vllm":
-            args.model = "Qwen/Qwen3-32B"
-        elif args.model_source == "openai":
-            args.model = "o4-mini-2025-04-16"
-        elif args.model_source == "openrouter":
-            args.model = "qwen/qwen3-235b-a22b-07-25"
-
-    if args.image:
-        if args.notes:
-            os.makedirs("./data/image/baselines", exist_ok=True)
-        else:
-            os.makedirs("./data/image", exist_ok=True)
-        img_path = "./images"
-        os.makedirs(img_path, exist_ok=True)
-    else:
-        if args.notes:
-            os.makedirs("./data/text/baselines", exist_ok=True)
-        else:
-            os.makedirs("./data/text", exist_ok=True)
-        img_path = None
-
-    file_header = f"data/{'image/' if args.image else 'text/'}{'baselines/' if args.notes else ''}{args.model_source}_{args.model.replace('/', '-')}{'_cot' if args.cot else ''}_{args.n_boxes}_{args.n_tokens}_"
-    print(f"Saving to: {file_header}")
-
-    # Check if results already exist
-    stats_file = file_header + "run_stats.json"
-    history_file = file_header + "run_history.json"
-
-    if os.path.exists(stats_file) and os.path.exists(history_file):
-        print(f"Results already exist at {stats_file}")
-        with open(stats_file, "r") as f:
-            run_stats = json.load(f)
-
-        # Calculate and display statistics
-        avg_stats = {}
-        for key in run_stats["run_1"].keys():
-            if type(run_stats["run_1"][key]) == int:
-                avg_stats[key] = np.mean([stats[key] for stats in run_stats.values()])
-
-        for key, value in avg_stats.items():
-            print(f"{key}: {value}")
-
-        tot_score = 0
-        for stats in run_stats.values():
-            tot_score += score(stats)
-        print(f"Score: {tot_score / len(run_stats.keys())}")
-        exit(0)
-
-    run_stats = {}
-    run_history = {}
-    run_reasoning = {}  # Add new dictionary for reasoning traces
-
-    for i in range(args.runs):
-        model = None
-        torch.cuda.empty_cache()
-
-        model = ModelWrapper(
-            args.model,
-            args.model_source,
-            api_key=args.api_key,
-            max_new_tokens=args.max_tokens,
-            image_input=args.image,
-            image_path=img_path,
-        )
-
-        print(f"Run {i+1}/{args.runs}")
+    if args.test == "wcst":
         if args.image:
-            run_stats[f"run_{i+1}"] = image_swm(
-                model,
-                args.n_boxes,
-                n_tokens=args.n_tokens,
+            from WCST.wcst import run_wcst_image  # type: ignore
+            run_wcst_image(
+                model=args.model,
+                max_trials=args.max_trials,
+                num_correct=args.num_correct,
+                repeats=args.repeats,
+                few_shot=args.few_shot,
                 cot=args.cot,
+                hint=args.hint,
+                model_source=args.model_source,
+                max_tokens=args.max_tokens,
                 think_budget=args.think_budget,
-                note_assist=args.notes,
+                api_key=args.api_key,
+                verbose=args.verbose,
             )
         else:
-            run_stats[f"run_{i+1}"] = run_swm(
-                model,
-                args.n_boxes,
-                n_tokens=args.n_tokens,
+            from WCST.wcst import run_wcst  # type: ignore
+            run_wcst(
+                model=args.model,
+                variant=args.variant,
+                max_trials=args.max_trials,
+                num_correct=args.num_correct,
+                repeats=args.repeats,
+                few_shot=args.few_shot,
                 cot=args.cot,
+                hint=args.hint,
+                model_source=args.model_source,
+                max_tokens=args.max_tokens,
                 think_budget=args.think_budget,
-                note_assist=args.notes,
+                api_key=args.api_key,
+                verbose=args.verbose,
             )
-        run_history[f"run_{i+1}"] = model.history
-        run_reasoning[f"run_{i+1}"] = model.reasoning_trace  # Save reasoning trace
+    elif args.test == "swm":
+        # run multiple runs using legacy functions
+        if args.model is None:
+            if args.model_source == "vllm":
+                args.model = "Qwen/Qwen3-32B"
+            elif args.model_source == "openai":
+                args.model = "o4-mini-2025-04-16"
+            else:
+                args.model = "qwen/qwen3-235b-a22b-07-25"
+        img_path = "./images" if args.image else None
+        if args.image and image_swm is None:
+            raise RuntimeError("image_swm not available")
+        run_stats = {}
+        for i in range(args.runs):
+            torch.cuda.empty_cache()
+            model = ModelWrapper(
+                args.model,
+                args.model_source,
+                api_key=args.api_key,
+                max_new_tokens=args.max_tokens,
+                image_input=args.image,
+                image_path=img_path,
+            )
+            if args.image:
+                if image_swm is None:
+                    raise RuntimeError("image_swm function unavailable for image mode")
+                run_stats[f"run_{i+1}"] = image_swm(
+                    model,
+                    args.n_boxes,
+                    n_tokens=args.n_tokens,
+                    cot=args.cot,
+                    think_budget=args.think_budget,
+                    note_assist=args.notes,
+                )
+            else:
+                run_stats[f"run_{i+1}"] = run_swm(
+                    model,
+                    args.n_boxes,
+                    n_tokens=args.n_tokens,
+                    cot=args.cot,
+                    think_budget=args.think_budget,
+                    note_assist=args.notes,
+                )
+        # simple aggregate output
+        avg = np.mean([score(s) for s in run_stats.values()])
+        print(f"Average SWM score over {args.runs} runs: {avg:.4f}")
 
-        with open(file_header + "run_stats.json", "w") as f:
-            json.dump(run_stats, f, indent=4)
-
-        with open(file_header + "run_history.json", "w") as f:
-            json.dump(run_history, f, indent=4)
-
-        with open(
-            file_header + "run_reasoning.json", "w"
-        ) as f:  # Save reasoning traces
-            json.dump(run_reasoning, f, indent=4)
-
-    avg_stats = {}
-    for key in run_stats["run_1"].keys():
-        if type(run_stats["run_1"][key]) == int:
-            avg_stats[key] = np.mean([stats[key] for stats in run_stats.values()])
-
-    for key, value in avg_stats.items():
-        print(f"{key}: {value}")
-
-    tot_score = 0
-    for stats in run_stats.values():
-        tot_score += score(stats)
-    print(f"Score: {tot_score / len(run_stats.keys())}")
+if __name__ == "__main__":
+    orchestrate()

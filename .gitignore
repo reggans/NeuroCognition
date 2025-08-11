@@ -174,5 +174,9 @@ data*/
 wcst_data*/
 rapm_data*/
 images/
+SWM/images/
+WCST/images/
 viz.ipynb
 test_rapm_data.json
+api_calc.ipynb
+*.sh
