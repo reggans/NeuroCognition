@@ -32,6 +32,7 @@ except Exception:
 
 # ---------------- Legacy SWM implementation (from HEAD) ---------------- #
 
+
 def run_swm(model, n_boxes, n_tokens=1, cot=None, think_budget=64, note_assist=False):
     """Run the (text) Spatial Working Memory (SWM) test with the given model."""
     task_prompt = f"""You will be performing a text version of the Spatial Working Memory (SWM) test.
@@ -64,11 +65,13 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
     tokens = [string.ascii_uppercase[x] for x in range(n_tokens)]
     legal_boxes = {t: [x for x in range(1, n_boxes + 1)] for t in tokens}
 
-    worst_case_n = n_boxes ** 2
+    worst_case_n = n_boxes**2
     total_guess = illegal_guess = invalid_guess = repeated_guess = 0
 
     response = model.send_message(question, cot=cot, truncate_history=True)
-    with tqdm(total=worst_case_n, desc="Total guesses") as guess_bar, tqdm(total=n_boxes * n_tokens, desc="Tokens") as token_bar:
+    with tqdm(total=worst_case_n, desc="Total guesses") as guess_bar, tqdm(
+        total=n_boxes * n_tokens, desc="Tokens"
+    ) as token_bar:
         token_box = {t: random.choice(legal_boxes[t]) for t in tokens}
         found_tokens = []
         while True:
@@ -80,7 +83,10 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
             with open("data/temp_history.json", "w") as f:
                 json.dump(model.history, f, indent=4)
 
-            if all(len(legal) == 0 for legal in legal_boxes.values()) or total_guess >= worst_case_n:
+            if (
+                all(len(legal) == 0 for legal in legal_boxes.values())
+                or total_guess >= worst_case_n
+            ):
                 break
 
             opened_boxes = set()
@@ -100,9 +106,16 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                             if box not in legal:
                                 notes += f"{box}, "
                         notes += "\n"
-                    notes += "Opened boxes: " + ", ".join(str(b) for b in opened_boxes) + "\n"
+                    notes += (
+                        "Opened boxes: "
+                        + ", ".join(str(b) for b in opened_boxes)
+                        + "\n"
+                    )
 
-                msg = "".join(f"{token} tokens found: {n_boxes - len(legal_boxes[token])}\n" for token in tokens)
+                msg = "".join(
+                    f"{token} tokens found: {n_boxes - len(legal_boxes[token])}\n"
+                    for token in tokens
+                )
 
                 match = re.search(r"<answer>\s*([\s\S]*?)\s*</answer>", response)
                 if match is not None:
@@ -111,7 +124,10 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         chosen_box = int(chosen_box)
                     except ValueError:
                         response = model.send_message(
-                            f"Please answer with a box number (1-{n_boxes}).\n" + msg + notes + question,
+                            f"Please answer with a box number (1-{n_boxes}).\n"
+                            + msg
+                            + notes
+                            + question,
                             truncate_history=True,
                             cot=cot,
                         )
@@ -119,7 +135,10 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         continue
                 else:
                     response = model.send_message(
-                        f"Please answer with the specified format\n" + msg + notes + question,
+                        f"Please answer with the specified format\n"
+                        + msg
+                        + notes
+                        + question,
                         truncate_history=True,
                         cot=cot,
                     )
@@ -144,11 +163,16 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         found_tokens.append(token)
 
                 if found:
-                    msg = "".join(f"Token {token} found in box {chosen_box}.\n" for token in found_tokens)
+                    msg = "".join(
+                        f"Token {token} found in box {chosen_box}.\n"
+                        for token in found_tokens
+                    )
                 else:
                     msg = f"No tokens found in box {chosen_box}.\n"
 
-                response = model.send_message(msg + notes + question, truncate_history=True, cot=cot)
+                response = model.send_message(
+                    msg + notes + question, truncate_history=True, cot=cot
+                )
                 model.history[-2]["content"] = msg
 
     return {
@@ -159,10 +183,19 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
         "repeated": repeated_guess,
     }
 
+
 def score(run_stats):
-    return 1 - (run_stats["illegal"] + run_stats["repeated"]) / (run_stats["guesses"] - run_stats["invalid"]) if (run_stats["guesses"] - run_stats["invalid"]) else 0.0
+    return (
+        1
+        - (run_stats["illegal"] + run_stats["repeated"])
+        / (run_stats["guesses"] - run_stats["invalid"])
+        if (run_stats["guesses"] - run_stats["invalid"])
+        else 0.0
+    )
+
 
 # ---------------- New orchestrator entrypoint (from image branch) ---------------- #
+
 
 def orchestrate():  # renamed from main() to avoid confusion
     parser = argparse.ArgumentParser(
@@ -180,7 +213,12 @@ Examples:
 
     wcst_parser = subparsers.add_parser("wcst", help="Run Wisconsin Card Sorting Test")
     wcst_parser.add_argument("--model", type=str, default="llama")
-    wcst_parser.add_argument("--variant", type=str, default="card", choices=["card", "card-random", "string", "empty"])
+    wcst_parser.add_argument(
+        "--variant",
+        type=str,
+        default="card",
+        choices=["card", "card-random", "string", "empty"],
+    )
     wcst_parser.add_argument("--max_trials", type=int, default=64)
     wcst_parser.add_argument("--num_correct", type=int, default=5)
     wcst_parser.add_argument("--repeats", type=int, default=1)
@@ -188,7 +226,12 @@ Examples:
     wcst_parser.add_argument("--cot", action="store_true")
     wcst_parser.add_argument("--hint", action="store_true")
     wcst_parser.add_argument("--image", action="store_true")
-    wcst_parser.add_argument("--model_source", type=str, default="vllm", choices=["vllm", "openai", "openrouter"])
+    wcst_parser.add_argument(
+        "--model_source",
+        type=str,
+        default="vllm",
+        choices=["vllm", "openai", "openrouter"],
+    )
     wcst_parser.add_argument("--max_tokens", type=int, default=512)
     wcst_parser.add_argument("--think_budget", type=int, default=64)
     wcst_parser.add_argument("--api_key", type=str, default=None)
@@ -196,7 +239,12 @@ Examples:
 
     swm_parser = subparsers.add_parser("swm", help="Run Spatial Working Memory test")
     swm_parser.add_argument("--model", type=str, default=None)
-    swm_parser.add_argument("--model_source", type=str, default="vllm", choices=["vllm", "openai", "openrouter"])
+    swm_parser.add_argument(
+        "--model_source",
+        type=str,
+        default="vllm",
+        choices=["vllm", "openai", "openrouter"],
+    )
     swm_parser.add_argument("--n_boxes", type=int, default=6)
     swm_parser.add_argument("--n_tokens", type=int, default=1)
     swm_parser.add_argument("--cot", action="store_true")
@@ -212,6 +260,7 @@ Examples:
     if args.test == "wcst":
         if args.image:
             from WCST.wcst import run_wcst_image  # type: ignore
+
             run_wcst_image(
                 model=args.model,
                 max_trials=args.max_trials,
@@ -228,6 +277,7 @@ Examples:
             )
         else:
             from WCST.wcst import run_wcst  # type: ignore
+
             run_wcst(
                 model=args.model,
                 variant=args.variant,
@@ -289,6 +339,7 @@ Examples:
         # simple aggregate output
         avg = np.mean([score(s) for s in run_stats.values()])
         print(f"Average SWM score over {args.runs} runs: {avg:.4f}")
+
 
 if __name__ == "__main__":
     orchestrate()
