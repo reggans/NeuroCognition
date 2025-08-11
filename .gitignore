@@ -172,4 +172,7 @@ cython_debug/
 
 data*/
 wcst_data*/
+rapm_data*/
+images/
 viz.ipynb
+test_rapm_data.json
