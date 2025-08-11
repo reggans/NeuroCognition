@@ -13,8 +13,10 @@ __author__ = "CognitiveEval Team"
 try:
     from .main import score  # type: ignore
 except Exception:
+
     def score(*_, **__):  # fallback no-op
         raise NotImplementedError("score function not available in this context")
+
 
 # Primary public APIs
 try:
@@ -29,8 +31,8 @@ except Exception:
 
 __all__ = []
 if run_wcst is not None:
-    __all__.append('run_wcst')
+    __all__.append("run_wcst")
 if swm_main is not None:
-    __all__.append('swm_main')
+    __all__.append("swm_main")
 if score is not None:
-    __all__.append('score')
+    __all__.append("score")
