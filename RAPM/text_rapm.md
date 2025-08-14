@@ -116,6 +116,50 @@ Additional Generation Policies (Implemented):
 
 ---
 
+Leak Detection & Consolidation (Implemented):
+
+- Timing: Leaks are inferred AFTER the full 3x3 grid strings are generated under the originally chosen row + column attributes.
+- Scope: A candidate leak must hold for ALL 3 strings in a given row (row candidate) or ALL 3 strings in a given column (column candidate).
+- Intersection: For rows, we intersect the candidate sets across the 3 rows to retain only leaks universally true for every row; same for columns (across the 3 columns). Only universally valid leaks are reported.
+- Supported leak types (mirrors primary attribute set):
+  - character_set_type (all characters drawn from letters / digits / symbols)
+  - type*count parity / multiple (even, odd, multiple_of*{2,3,4}) for any character type with non‑zero counts
+  - quant_constant (exact counts) for any metric (character types + length + unique)
+  - quant_progression (arithmetic progression across the 3 cells) for any metric
+  - sorted (ascending / descending / mixed) when no positional constraint present
+  - positional (first / last / even / odd positions enforce a character type) when no ordering constraint present
+- Overlap Simplification:
+  - If multiple leak specs differ ONLY by character_type (e.g., positional vowels vs positional letters) we retain the spec whose character pool is largest (preferring the most general) and drop the rest.
+  - A second pass performs the same consolidation for leaks that differ ONLY by metric (excluding length/unique) again selecting the largest underlying pool.
+  - Result: Each leak appears at most once; no axis-specific duplication.
+- Application:
+  - Accepted leaks are applied to every cell constraint along the corresponding axis, but only when the specific constraint slot is still unset (e.g., add parity rule only if target count not already fixed and no parity rule present; add ordering only if no positional constraint; add positional only if neither positional nor ordering exists, etc.).
+  - Character set leaks narrow allowed character pools by intersection (never expand beyond what the strings already use), guaranteeing the existing strings still satisfy the updated constraints (no regeneration required).
+- Reporting:
+  - row_leaks: list of consolidated leak specs universal to ALL rows.
+  - col_leaks: list of consolidated leak specs universal to ALL columns.
+  - No per-row / per-column duplication; each spec is reported once.
+- Guarantees:
+  - The final answer strings satisfy BOTH the originally chosen attributes AND every reported leak.
+  - Distractors are generated only after leak application and must violate at least one (chosen or leaked) constraint to be accepted.
+
+Enhanced Compatibility / Infeasibility Handling:
+
+- Added detection for infeasible parity or multiple rules when the effective character set restriction makes a non‑zero count impossible (e.g., requesting consonant parity inside a symbols‑only character set).
+- Detects MULTIPLE_INFEASIBLE alongside existing parity infeasibility flags and prevents construction of contradictory constraints.
+- Prevents sorted + positional coexistence (already noted) and disallows zero counts under parity/multiple semantics.
+- Ensures unique / length targets do not exceed available pool size after any character set narrowing.
+
+Randomness / Seeding:
+
+- External/user seed input removed; each generation run derives an internal random 64‑bit seed automatically (exposed only in debug metadata if present). This eliminates unintended reproducibility while keeping per‑item stochastic variability.
+
+Distractors (Clarification):
+
+- Validation uses the post‑leak (augmented) constraint set. Any candidate fully satisfying all constraints is rejected and mutated until at least one constraint violation is present (or another strategy chosen), ensuring a single unambiguous correct answer.
+
+---
+
 Notes / Differences from Original Spec:
 
 - Quant Constant range narrowed to 2–5.
