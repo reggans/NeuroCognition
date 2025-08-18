@@ -6,6 +6,7 @@ import base64
 import json
 from typing import List, Dict
 
+
 def validate_message_turns(messages: List[Dict], save_error: bool = True) -> bool:
     """
     Validates that messages alternate properly between user and assistant/model roles.
@@ -65,10 +66,10 @@ def validate_message_turns(messages: List[Dict], save_error: bool = True) -> boo
 def encode_image_to_base64(image_path: str) -> str:
     """
     Encode an image file to base64 string with proper data URL format.
-    
+
     Args:
         image_path: Path to the image file
-        
+
     Returns:
         str: Base64 encoded image as data URL (data:image/png;base64,...)
     """
@@ -77,21 +78,21 @@ def encode_image_to_base64(image_path: str) -> str:
             # Read the image file
             image_data = image_file.read()
             # Encode to base64
-            base64_string = base64.b64encode(image_data).decode('utf-8')
+            base64_string = base64.b64encode(image_data).decode("utf-8")
             # Determine the image format from file extension
             file_extension = os.path.splitext(image_path)[1].lower()
-            if file_extension == '.png':
-                mime_type = 'image/png'
-            elif file_extension in ['.jpg', '.jpeg']:
-                mime_type = 'image/jpeg'
-            elif file_extension == '.gif':
-                mime_type = 'image/gif'
-            elif file_extension == '.webp':
-                mime_type = 'image/webp'
+            if file_extension == ".png":
+                mime_type = "image/png"
+            elif file_extension in [".jpg", ".jpeg"]:
+                mime_type = "image/jpeg"
+            elif file_extension == ".gif":
+                mime_type = "image/gif"
+            elif file_extension == ".webp":
+                mime_type = "image/webp"
             else:
                 # Default to png if unknown
-                mime_type = 'image/png'
-            
+                mime_type = "image/png"
+
             # Return as data URL
             return f"data:{mime_type};base64,{base64_string}"
     except Exception as e:
@@ -168,22 +169,24 @@ class ModelWrapper:
 
         # Store original response
         raw_response = None
-
         if self.image_input:
             image_file_path = os.path.join(self.image_path, "current.png")
             base64_image = encode_image_to_base64(image_file_path)
+            content = []
+            if message:
+                content.append({"type": "text", "text": message})
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": base64_image,
+                    },
+                }
+            )
             self.history.append(
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": message},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": base64_image
-                            },
-                        },
-                    ],
+                    "content": content,
                 }
             )
         else:
@@ -205,67 +208,82 @@ class ModelWrapper:
                 extra_body = {"reasoning": {"enabled": False}}
         if self.model_source == "openai":
             try:
-                raw_response = self.client.chat.completions.create(
+                raw_resp = self.client.chat.completions.create(
                     model=self.model_name,
                     messages=self.history,
                     max_completion_tokens=max_new_tokens or self.max_new_tokens,
                     extra_body=extra_body,
                 )
-                print(raw_response.choices[0].finish_reason)
-                raw_response = raw_response.choices[0].message.content
-                print(raw_response)
+                print(raw_resp.choices[0].finish_reason)
+                raw_response = raw_resp.choices[0].message.content
             except:
                 time.sleep(5)
-                raw_response = self.client.chat.completions.create(
+                raw_resp = self.client.chat.completions.create(
                     model=self.model_name,
                     messages=self.history,
                     max_completion_tokens=max_new_tokens or self.max_new_tokens,
                     extra_body=extra_body,
                 )
-                print(raw_response.choices[0].finish_reason)
-                raw_response = raw_response.choices[0].message.content
-                print(raw_response)
+                print(raw_resp.choices[0].finish_reason)
+                raw_response = raw_resp.choices[0].message.content
         else:
             try:
-                raw_response = self.client.chat.completions.create(
+                raw_resp = self.client.chat.completions.create(
                     model=self.model_name,
                     messages=self.history,
                     max_tokens=max_new_tokens or self.max_new_tokens,
-                    temperature=0.6,
-                    top_p=0.95,
+                    temperature=0.0,
+                    # top_p=0.95,
                     extra_body=extra_body,
                 )
-                print(raw_response.choices[0].finish_reason)
-                raw_response = raw_response.choices[0].message.content
-                print(raw_response)
+                print(raw_resp.choices[0].finish_reason)
+                if raw_resp.choices[0].finish_reason == "error":
+                    print(raw_resp)
+                    print(
+                        f"Model returned error: {raw_resp.choices[0].message.content}"
+                    )
+                raw_response = raw_resp.choices[0].message.content
+                raw_reasoning = raw_resp.choices[0].message.reasoning
             except:
                 time.sleep(5)
-                raw_response = self.client.chat.completions.create(
+                raw_resp = self.client.chat.completions.create(
                     model=self.model_name,
                     messages=self.history,
                     max_tokens=max_new_tokens or self.max_new_tokens,
-                    temperature=0.6,
-                    top_p=0.95,
+                    temperature=0.0,
+                    # top_p=0.95,
                     extra_body=extra_body,
                 )
-                print(raw_response.choices[0].finish_reason)
-                raw_response = raw_response.choices[0].message.content
-                print(raw_response)
+                print(raw_resp.choices[0].finish_reason)
+                if raw_resp.choices[0].finish_reason == "error":
+                    print(raw_resp)
+                    print(
+                        f"Model returned error: {raw_resp.choices[0].message.content}"
+                    )
+                raw_response = raw_resp.choices[0].message.content
+                raw_reasoning = raw_resp.choices[0].message.reasoning
 
         # Add this code after getting raw_response but before updating history
         if cot:
-            # Extract reasoning trace from response
-            trace = re.search(r"<think>(.*?)</think>", raw_response, re.DOTALL)
-            if not trace:
-                trace = re.search(r"<thinking>(.*?)</thinking>", raw_response, re.DOTALL)
-            if trace:
+            if raw_reasoning:
                 self.reasoning_trace.append(
-                    {"user_message": message, "reasoning": trace.group(1).strip()}
+                    {"user_message": message, "reasoning": raw_reasoning.strip()}
                 )
             else:
-                self.reasoning_trace.append(
-                    {"user_message": message, "reasoning": raw_response.strip()}
-                )
+                # Extract reasoning trace from response
+                trace = re.search(r"<think>(.*?)</think>", raw_response, re.DOTALL)
+                if not trace:
+                    trace = re.search(
+                        r"<thinking>(.*?)</thinking>", raw_response, re.DOTALL
+                    )
+                if trace:
+                    self.reasoning_trace.append(
+                        {"user_message": message, "reasoning": trace.group(1).strip()}
+                    )
+                else:
+                    self.reasoning_trace.append(
+                        {"user_message": message, "reasoning": raw_response.strip()}
+                    )
 
         # Parse response
         if truncate_history:
