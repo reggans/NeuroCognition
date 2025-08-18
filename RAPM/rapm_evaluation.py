@@ -31,6 +31,7 @@ import argparse
 import json
 import os
 import re
+import sys
 import shutil
 from collections import defaultdict
 
@@ -43,7 +44,10 @@ except ImportError:
         return iterable
 
 
-from model_wrapper import ModelWrapper
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+from shared.model_wrapper import ModelWrapper
 
 # Base image prompt (without pattern catalogue)
 RAPM_BASE_PROMPT = (
