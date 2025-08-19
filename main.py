@@ -294,6 +294,13 @@ Examples:
         "--output_dir", type=str, default="rapm_data", help="Directory to write RAPM results"
     )
     rapm_parser.add_argument("--verbose", type=int, default=15)
+    rapm_parser.add_argument(
+        "--answer_mode",
+        type=str,
+        default="mc",
+        choices=["mc", "gen"],
+        help="Text RAPM only: 'mc' for multiple-choice, 'gen' to generate the missing cell directly.",
+    )
 
     args = parser.parse_args()
 
@@ -396,6 +403,8 @@ Examples:
         if not os.path.exists(args.output_dir):
             os.makedirs(args.output_dir)
         base_name = f"{args.model_source}_{args.model.replace('/', '-')}_rapm_{args.mode}"
+        if args.mode == "text" and getattr(args, "answer_mode", "mc") == "gen":
+            base_name += "_gen"
         if args.patterns:
             base_name += "_pat"
         if args.cot:
