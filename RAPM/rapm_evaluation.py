@@ -48,6 +48,8 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 from shared.model_wrapper import ModelWrapper
+from RAPM.text_rapm.per_cell_constraints import CellConstraint
+from RAPM.text_rapm.validator import cell_satisfies
 
 # Base image prompt (without pattern catalogue)
 RAPM_BASE_PROMPT = (
@@ -79,7 +81,7 @@ RAPM_ANSWER_SUFFIX = "Your final answer should be a number between 1-8 correspon
 # Base text prompt (without pattern catalogue)
 TEXT_RAPM_BASE_PROMPT = (
     "You are solving a TEXT-BASED 3x3 pattern matrix (Raven-style). Each cell contains a string; the bottom-right cell is missing ('?').\n\n"
-    "Goal: Infer the rule(s) acting across rows and columns and pick which option (1-8) correctly fills the missing cell.\n\n"
+    "Goal: Infer the rule(s) acting across rows and columns.\n\n"
 )
 TEXT_RAPM_PATTERN_INFO = (
     "Possible dimensions (one or more):\n"
@@ -90,7 +92,14 @@ TEXT_RAPM_PATTERN_INFO = (
     "- Positional constraints (first/last/even/odd positions restricted)\n"
     "- Ordering (ascending / descending / mixed)\n"
     "- Layered combinations (e.g. constant + parity, progression + positional)\n\n"
-    "Select the option satisfying ALL inferred row and column constraints.\n\n"
+)
+TEXT_RAPM_MODE_INSTR_MC = (
+    "You will be given 8 answer options (1-8). Select the single option that correctly fills the missing cell while satisfying ALL inferred row and column constraints.\n"
+    "Respond with <answer>NUMBER</answer> using just the chosen option number.\n"
+)
+TEXT_RAPM_MODE_INSTR_GEN = (
+    "You must GENERATE the exact missing cell string that satisfies ALL inferred row and column constraints.\n"
+    "Respond with <answer>STRING</answer> containing only the candidate string (no quotes or extra text).\n"
 )
 
 
@@ -330,6 +339,21 @@ def run_rapm_evaluation(args):
 
 
 # --- New: text RAPM evaluation ---
+def _reconstruct_cell_constraint(d: dict) -> CellConstraint:
+    """Rebuild a CellConstraint from a serialized describe() dict."""
+    return CellConstraint(
+        fixed_length=d.get("fixed_length"),
+        target_counts=d.get("target_counts", {}) or {},
+        parity_rules=d.get("parity_rules", {}) or {},
+        multiple_rules=d.get("multiple_rules", {}) or {},
+        unique_exact=d.get("unique_exact"),
+        ordering=d.get("ordering"),
+        positional_type=d.get("positional_type"),
+        positional_index_rule=d.get("positional_index_rule"),
+        # allowed_chars not serialized (size only), ignore
+    )
+
+
 def run_text_rapm_evaluation(args):
     items = load_text_rapm_jsonl(args.eval_data)
     print(f"Loaded {len(items)} text RAPM items")
@@ -344,12 +368,15 @@ def run_text_rapm_evaluation(args):
     system_prompt = TEXT_RAPM_BASE_PROMPT
     if args.patterns:
         system_prompt += TEXT_RAPM_PATTERN_INFO
-    system_prompt += RAPM_ANSWER_SUFFIX
+    # Mode-specific instructions
+    if args.answer_mode == "mc":
+        system_prompt += TEXT_RAPM_MODE_INSTR_MC
+    else:
+        system_prompt += TEXT_RAPM_MODE_INSTR_GEN
     if args.cot:
         system_prompt += f"Explain your thought process (max {args.think_budget} tokens) inside <think>...</think> then final answer.\n"
     else:
         system_prompt += "Answer only with your final answer.\n"
-    system_prompt += "State your final answer as: <answer>number</answer>\n"
     results = []
     cat_correct = defaultdict(int)
     cat_total = defaultdict(int)
@@ -370,28 +397,53 @@ def run_text_rapm_evaluation(args):
                     row_cells.append(v)
             rows_fmt.append(" | ".join(row_cells))
         grid_text = "\n".join(rows_fmt)
-        options = item["options"]
-        opt_lines = [f"{i+1}. {o}" for i, o in enumerate(options)]
-        prompt = (
-            f"Matrix:\n{grid_text}\n\nOptions:\n"
-            + "\n".join(opt_lines)
-            + "\n\nAnswer with <answer>N</answer>."
-        )
+        if args.answer_mode == "mc":
+            options = item["options"]
+            opt_lines = [f"{i+1}. {o}" for i, o in enumerate(options)]
+            prompt = (
+                f"Matrix:\n{grid_text}\n\nOptions:\n"
+                + "\n".join(opt_lines)
+                + "\n\nAnswer with <answer>N</answer>."
+            )
+        else:
+            prompt = (
+                f"Matrix:\n{grid_text}\n\nThe bottom-right cell should be generated. Provide only the inferred string in <answer>...</answer>."
+            )
         response = model.send_message(prompt, cot=args.cot, truncate_history=True)
-        answer_match = re.search(r"<answer>(.*?)</answer>", response)
+        answer_match = re.search(r"<answer>(.*?)</answer>", response, flags=re.DOTALL)
         predicted = None
-        if answer_match:
-            ans_txt = answer_match.group(1).strip()
-            nums = re.findall(r"\d+", ans_txt)
-            if nums:
-                try:
-                    n = int(nums[0])
-                    if 1 <= n <= 8:
-                        predicted = n
-                except ValueError:
-                    pass
-        correct_index = item["correct_index"]
-        is_correct = predicted is not None and (predicted - 1) == correct_index
+        is_correct = False
+        matches_gold = False
+        constraint_valid = False
+        if args.answer_mode == "mc":
+            if answer_match:
+                ans_txt = answer_match.group(1).strip()
+                nums = re.findall(r"\d+", ans_txt)
+                if nums:
+                    try:
+                        n = int(nums[0])
+                        if 1 <= n <= 8:
+                            predicted = n
+                    except ValueError:
+                        pass
+            correct_index = item["correct_index"]
+            is_correct = predicted is not None and (predicted - 1) == correct_index
+        else:  # generation mode
+            gold_answer = item["raw"].get("answer")
+            constraint_desc = (item["raw"].get("cell_constraints") or {}).get("2,2")
+            cell_constraint = _reconstruct_cell_constraint(constraint_desc) if constraint_desc else None
+            generated = None
+            if answer_match:
+                generated = answer_match.group(1).strip()
+                # remove surrounding quotes if model added them
+                if generated.startswith("\"") and generated.endswith("\"") and len(generated) >= 2:
+                    generated = generated[1:-1]
+                predicted = generated  # for result record
+                if cell_constraint and generated:
+                    constraint_valid = cell_satisfies(generated, cell_constraint)
+                matches_gold = generated == gold_answer
+                is_correct = constraint_valid  # primary criterion
+            correct_index = None  # not applicable
         # Category extraction (if available)
         raw = item["raw"]
         cats = (
@@ -411,6 +463,7 @@ def run_text_rapm_evaluation(args):
                 "id": item["id"],
                 "predicted_answer": predicted,
                 "correct_index": correct_index,
+                **({"matches_gold": matches_gold, "constraint_valid": constraint_valid} if args.answer_mode == "gen" else {}),
                 "is_correct": is_correct,
                 "response": response,
                 "categories": cats,
@@ -438,6 +491,7 @@ def run_text_rapm_evaluation(args):
     summary = {
         "model": args.model,
         "mode": "text",
+        "answer_mode": args.answer_mode,
         "total": total,
         "correct": total_correct,
         "overall_accuracy": overall_accuracy,
@@ -506,12 +560,21 @@ def main():
         default=100,
         help="Limit per dataset type (image mode only; 0 = no limit)",
     )
+    parser.add_argument(
+        "--answer_mode",
+        type=str,
+        default="mc",
+        choices=["mc", "gen"],
+        help="Answer mode for text RAPM: 'mc' (multiple-choice) or 'gen' (generate missing cell). Ignored in image mode.",
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
 
     base_name = f"{args.model_source}_{args.model.replace('/', '-')}_rapm_{args.mode}"
+    if args.mode == "text" and getattr(args, "answer_mode", "mc") == "gen":
+        base_name += "_gen"
     if args.patterns:
         base_name += "_pat"
     if args.cot:
