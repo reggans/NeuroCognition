@@ -244,6 +244,16 @@ def detect_axis_leaks(
         if key not in seen:
             seen.add(key)
             unique.append(spec)
+
+    # If both positional and sorted leaks are present, prefer positional.
+    # Rationale: We cannot simultaneously apply ordering and positional constraints
+    # (see detection functions treating them as incompatible). Previously both
+    # could appear, then 'sorted' was applied first, blocking positional from
+    # being written into constraints. This caused missing positional metadata
+    # in generated cell constraints even though a positional leak was reported.
+    has_positional = any(spec.get("attribute") == "positional" for spec in unique)
+    if has_positional:
+        unique = [spec for spec in unique if spec.get("attribute") != "sorted"]
     return unique
 
 
@@ -342,8 +352,10 @@ def _simplify_character_type_overlaps(
         def pool_size(sp: Dict[str, Any]) -> int:
             ct = sp.get("character_type")
             return len(CHARACTER_POOLS.get(ct, [])) if isinstance(ct, str) else -1
-
-        interim.append(max(specs, key=pool_size))
+        # Previously we picked the LARGEST pool (broadest category). For harder puzzles
+        # we now pick the SMALLEST pool (most specific signal), so if both 'letters'
+        # and 'consonants-lowercase' (example) appear, we keep the narrower one.
+        interim.append(min(specs, key=pool_size))
     # Phase 2: consolidate specs differing only by metric (excluding length/unique)
     grouped_metric: Dict[Tuple[Tuple[str, Any], ...], List[Dict[str, Any]]] = {}
     for spec in interim:
@@ -362,9 +374,10 @@ def _simplify_character_type_overlaps(
 
         def pool_size_metric(sp: Dict[str, Any]) -> int:
             m = sp.get("metric")
-            return len(CHARACTER_POOLS.get(m, [])) if isinstance(m, str) else -1
+            return len(CHARACTER_POOLS.get(m, [])) if isinstance(m, str) else 10**9
 
-        final_specs.append(max(specs, key=pool_size_metric))
+        # Likewise choose smallest metric pool when multiple interchangeable specs exist.
+        final_specs.append(min(specs, key=pool_size_metric))
     return final_specs
 
 
