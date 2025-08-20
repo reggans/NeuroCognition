@@ -161,7 +161,8 @@ def run_rapm_evaluation(args):
         },
         "args": vars(args),
     }
-    return results, summary, model.history, reasoning_traces
+    # history no longer persisted externally
+    return results, summary, [], reasoning_traces
 
 
 # ---------------- Synchronous (text) ---------------- #
@@ -270,7 +271,7 @@ def run_text_rapm_evaluation(args):
         },
         "args": vars(args),
     }
-    return results, summary, model.history, reasoning_traces
+    return results, summary, [], reasoning_traces
 
 
 # ---------------- Batch submit / collect ---------------- #
@@ -430,7 +431,6 @@ def main():
         base += "_cot"
     results_path = os.path.join(args.output_dir, f"{base}_results.json")
     summary_path = os.path.join(args.output_dir, f"{base}_summary.json")
-    history_path = os.path.join(args.output_dir, f"{base}_history.json")
     reasoning_path = os.path.join(args.output_dir, f"{base}_reasoning.json")
 
     if os.path.exists(results_path) and args.batch_mode == "off":
@@ -463,7 +463,6 @@ def main():
         base += "_batch"
         results_path = os.path.join(args.output_dir, f"{base}_results.json")
         summary_path = os.path.join(args.output_dir, f"{base}_summary.json")
-        history_path = os.path.join(args.output_dir, f"{base}_history.json")
         reasoning_path = os.path.join(args.output_dir, f"{base}_reasoning.json")
     else:
         if args.mode == "image":
@@ -477,8 +476,6 @@ def main():
         json.dump(results, f, indent=2)
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
-    with open(history_path, "w") as f:
-        json.dump(history, f, indent=2)
     if reasoning_traces:
         with open(reasoning_path, "w") as f:
             json.dump(reasoning_traces, f, indent=2)
