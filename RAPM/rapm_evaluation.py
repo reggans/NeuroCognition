@@ -1,142 +1,60 @@
 #!/usr/bin/env python3
+"""RAPM evaluation (image & text) with optional OpenAI Batch API.
+All prompt construction, formatting, parsing, batch request building, and scoring helpers
+live in `RAPM/rapm_utils.py` to keep this driver lean.
 """
-RAPM (Raven's Progressive Matrices) Evaluation Script
-
-Supports two modes:
-- image: classic visual RPM items (JSON with questions list referencing image files)
-- text: text-based 3x3 string pattern matrices (JSONL, one item per line)
-
-This script evaluates language models on the Raven's Progressive Matrices test,
-a non-verbal intelligence test that measures abstract reasoning ability.
-
-Usage examples:
-  # Basic evaluation
-  python rapm_evaluation.py --model "gpt-4-vision-preview" --model_source openai --eval_data /path/to/raven_evaluation_data.json
-
-  # With chain-of-thought reasoning
-  python rapm_evaluation.py --model "gpt-4-vision-preview" --model_source openai --eval_data /path/to/raven_evaluation_data.json --cot
-
-  # Using OpenRouter
-  python rapm_evaluation.py --model "anthropic/claude-3-opus" --model_source openrouter --eval_data /path/to/raven_evaluation_data.json --cot
-
-The script will:
-1. Load the evaluation data from the JSON file
-2. For each question, send the full image (matrix + answer choices) to the model
-3. Extract the model's answer and check if it's correct
-4. Calculate accuracy overall and by dataset type
-5. Save results, history, and reasoning traces (if CoT is enabled)
-"""
-
-import argparse
-import json
-import os
-import re
-import sys
-import shutil
+import argparse, json, os, re, sys, shutil
 from collections import defaultdict
 
-try:
-    from tqdm.auto import tqdm
-except ImportError:
-    # Fallback if tqdm is not available
-    def tqdm(iterable, desc=None):
-        print(f"{desc}..." if desc else "Processing...")
-        return iterable
+try:  # pragma: no cover - optional dependency
+    from tqdm.auto import tqdm  # type: ignore
+except Exception:  # broad except ok for optional util
+
+    def tqdm(it, desc=None):  # type: ignore
+        if desc:
+            print(desc)
+        return it
 
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
+
 from shared.model_wrapper import ModelWrapper
-from RAPM.text_rapm.per_cell_constraints import CellConstraint
-from RAPM.text_rapm.validator import cell_satisfies
-
-# Base image prompt (without pattern catalogue)
-RAPM_BASE_PROMPT = (
-    "You are taking the Raven's Progressive Matrices (RPM) test, a non-verbal intelligence test that measures abstract reasoning ability.\n\n"
-    "You will see a 3x3 matrix of images with the bottom-right image missing (shown as a question mark), followed by 8 answer choices numbered 1-8.\n\n"
-    "Your task is to: \n"
-    "1. Analyze rows and columns\n2. Infer the governing logical rule(s)\n3. Select the answer choice (1-8) that correctly completes the matrix.\n\n"
-)
-RAPM_PATTERN_INFO = (
-    "The patterns can involve: \n"
-    "- Shape transformations (rotation, reflection, scaling)\n"
-    "- Position changes (movement, arrangement)\n"
-    "- Attribute changes (color, size, number of elements)\n"
-    "- Logical operations (addition, subtraction, intersection)\n"
-    "- Sequence progressions (systematic changes across rows/columns)\n\n"
-)
-# New: concise additional rule archetypes (image mode)
-RAPM_ADDITIONAL_RULES = (
-    "Additional common rule types:\n"
-    "- Constant-in-row: Same value across a row; varies down columns.\n"
-    "- Quantitative step: Fixed +/− increment between adjacent cells (size / count / position offset).\n"
-    "- Figure add/subtract: Combine (overlay or juxtapose) or remove elements from two cells to form the third.\n"
-    "- Distribution-of-three: Three distinct categorical values appear once each per row (order may permute).\n"
-    "- Distribution-of-two: Two values each appear once; third slot is empty / null.\n\n"
-    "Look horizontally and vertically; the missing piece must satisfy ALL relevant row and column rules.\n\n"
-)
-RAPM_ANSWER_SUFFIX = "Your final answer should be a number between 1-8 corresponding to the correct choice.\n"
-
-# Base text prompt (without pattern catalogue)
-TEXT_RAPM_BASE_PROMPT = (
-    "You are solving a TEXT-BASED 3x3 pattern matrix (Raven-style). Each cell contains a string; the bottom-right cell is missing ('?').\n\n"
-    "Goal: Infer the rule(s) acting across rows and columns.\n\n"
-)
-TEXT_RAPM_PATTERN_INFO = (
-    "Possible dimensions (one or more):\n"
-    "- Character set restriction (digits / letters / symbols)\n"
-    "- Quantitative constant (exact length / count / unique)\n"
-    "- Quantitative progression (arithmetic step across row/column)\n"
-    "- Parity / multiple rules (all even / all odd / multiples of N)\n"
-    "- Positional constraints (first/last/even/odd positions restricted)\n"
-    "- Ordering (ascending / descending / mixed)\n"
-    "- Layered combinations (e.g. constant + parity, progression + positional)\n\n"
-)
-TEXT_RAPM_MODE_INSTR_MC = (
-    "You will be given 8 answer options (1-8). Select the single option that correctly fills the missing cell while satisfying ALL inferred row and column constraints.\n"
-    "Respond with <answer>NUMBER</answer> using just the chosen option number.\n"
-)
-TEXT_RAPM_MODE_INSTR_GEN = (
-    "You must GENERATE the exact missing cell string that satisfies ALL inferred row and column constraints.\n"
-    "Respond with <answer>STRING</answer> containing only the candidate string (no quotes or extra text).\n"
+from RAPM.rapm_utils import (
+    build_image_system_prompt,
+    build_text_system_prompt,
+    format_text_item_prompt,
+    reconstruct_cell_constraint,
+    build_image_batch_requests,
+    build_text_batch_requests,
+    score_image,
+    score_text,
+    parse_image_answer,
+    parse_text_mc,
 )
 
+# ---------------- Data loading ---------------- #
 
-def load_evaluation_data(eval_data_path, limit_per_type=None):
-    """Load the evaluation data from JSON file.
 
-    Args:
-        eval_data_path: Path to the JSON file containing questions
-        limit_per_type: If provided, limit to this many questions per dataset type
-    """
-    with open(eval_data_path, "r") as f:
+def load_evaluation_data(path, limit_per_type=None):
+    with open(path, "r") as f:
         data = json.load(f)
-
     questions = data["questions"]
-
     if limit_per_type is not None:
-        # Group questions by dataset type
-        questions_by_type = defaultdict(list)
-        for question in questions:
-            questions_by_type[question["dataset_type"]].append(question)
-
-        # Take only the first N questions from each type
-        limited_questions = []
-        for dataset_type, type_questions in questions_by_type.items():
-            limited_questions.extend(type_questions[:limit_per_type])
-            print(
-                f"Selected {min(len(type_questions), limit_per_type)} questions from {dataset_type}"
-            )
-
-        questions = limited_questions
+        by_type = defaultdict(list)
+        for q in questions:
+            by_type[q["dataset_type"]].append(q)
+        limited = []
+        for dt, lst in by_type.items():
+            limited.extend(lst[:limit_per_type])
+            print(f"Selected {min(len(lst), limit_per_type)} questions from {dt}")
+        questions = limited
         print(f"Total questions after limiting: {len(questions)}")
-
     return questions
 
 
-# --- New: load text RAPM JSONL ---
-def load_text_rapm_jsonl(path: str):
+def load_text_rapm_jsonl(path):
     items = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -147,35 +65,26 @@ def load_text_rapm_jsonl(path: str):
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            # Normalize schema
-            qgrid = obj.get("question_grid") or obj.get("full_grid")
-            options = obj.get("options", [])
-            correct_index = obj.get("correct_index")
             items.append(
                 {
                     "id": obj.get("id") or f"text_rapm_{len(items)}",
-                    "question_grid": qgrid,
-                    "options": options,
-                    "correct_index": correct_index,
+                    "question_grid": obj.get("question_grid") or obj.get("full_grid"),
+                    "options": obj.get("options", []),
+                    "correct_index": obj.get("correct_index"),
                     "raw": obj,
                 }
             )
     return items
 
 
-def run_rapm_evaluation(args):
-    """Run the RAPM evaluation."""
+# ---------------- Synchronous (image) ---------------- #
 
-    # Image-based mode
+
+def run_rapm_evaluation(args):
     limit = args.limit_per_type if args.limit_per_type > 0 else None
     questions = load_evaluation_data(args.eval_data, limit_per_type=limit)
     print(f"Loaded {len(questions)} questions")
-
-    # Get unique dataset types for statistics
     dataset_types = set(q["dataset_type"] for q in questions)
-    print(f"Dataset types: {dataset_types}")
-
-    # Initialize model
     model = ModelWrapper(
         args.model,
         args.model_source,
@@ -183,175 +92,79 @@ def run_rapm_evaluation(args):
         max_new_tokens=args.max_tokens,
         think_budget=args.think_budget,
         image_input=True,
-        image_path=os.path.dirname(
-            args.eval_data
-        ),  # Set to directory containing the JSON file
+        image_path=os.path.dirname(args.eval_data),
     )
-
-    # Build system prompt conditionally
-    system_prompt = RAPM_BASE_PROMPT
-    if args.patterns:
-        system_prompt += RAPM_PATTERN_INFO + RAPM_ADDITIONAL_RULES
-    system_prompt += RAPM_ANSWER_SUFFIX
-    if args.cot:
-        system_prompt += f"\nExplain your thought process (max {args.think_budget} tokens) inside <think>...</think> then give final answer.\n"
-    else:
-        system_prompt += "\nAnswer only with your final answer.\n"
-    system_prompt += "State your final answer as: <answer>number</answer>\n"
-
-    # Results storage
+    system_prompt = build_image_system_prompt(args)
     results = []
     correct_by_type = defaultdict(int)
     total_by_type = defaultdict(int)
     reasoning_traces = []
-
-    # Process each question
-    for i, question in enumerate(tqdm(questions, desc="Processing questions")):
+    current_image_path = None
+    for i, q in enumerate(tqdm(questions, desc="Processing questions")):
         model.init_chat(system_prompt)
-        # Get image path
-        full_image_path = os.path.join(
-            os.path.dirname(args.eval_data), question["full_image"]
-        )
-
-        # Copy image to current.png in the image_path directory (required by model wrapper)
+        src = os.path.join(os.path.dirname(args.eval_data), q["full_image"])
         current_image_path = os.path.join(model.image_path, "current.png")  # type: ignore
-
-        # Use Python's shutil for more reliable copying
-        shutil.copy2(full_image_path, current_image_path)
-
-        # Send image to model (empty text message since everything is in the image)
-        response = model.send_message(
-            "",  # Empty message since question and choices are in the image
-            cot=args.cot,
-            truncate_history=True,  # Truncate history to avoid exceeding token limits
-        )
-
-        # Extract answer
-        answer_match = re.search(r"<answer>(.*?)</answer>", response)
-        predicted_answer = None
-        if answer_match:
-            answer_text = answer_match.group(1).strip()
-            numbers = re.findall(r"\d+", answer_text)
-            if numbers:
-                try:
-                    predicted_answer = int(numbers[0])
-                    # Validate answer is in valid range (1-8 for choices, but stored as 0-7)
-                    if predicted_answer < 1 or predicted_answer > 8:
-                        predicted_answer = None
-                except ValueError:
-                    predicted_answer = None
-
-        # Check if correct
-        # The correct_answer in the data is 0-indexed (0-7), predicted_answer is 1-indexed (1-8)
-        correct_answer = question["correct_answer"]
-        is_correct = (
-            predicted_answer is not None and (predicted_answer - 1) == correct_answer
-        )
-
-        # Update statistics
-        dataset_type = question["dataset_type"]
-        total_by_type[dataset_type] += 1
+        shutil.copy2(src, current_image_path)
+        resp = model.send_message("", cot=args.cot, truncate_history=True)
+        m = re.search(r"<answer>(.*?)</answer>", resp)
+        pred = parse_image_answer(m.group(1).strip() if m else None)
+        correct = q["correct_answer"]
+        is_correct = pred is not None and (pred - 1) == correct
+        dt = q["dataset_type"]
+        total_by_type[dt] += 1
         if is_correct:
-            correct_by_type[dataset_type] += 1
-
-        # Store result
-        result = {
-            "id": question["id"],
-            "dataset_type": dataset_type,
-            "correct_answer": correct_answer,
-            "predicted_answer": predicted_answer,
-            "is_correct": is_correct,
-            "response": response,
-            "image_path": question["full_image"],
-        }
-        results.append(result)
-
-        # Store reasoning if CoT was used
+            correct_by_type[dt] += 1
+        results.append(
+            {
+                "id": q["id"],
+                "dataset_type": dt,
+                "correct_answer": correct,
+                "predicted_answer": pred,
+                "is_correct": is_correct,
+                "response": resp,
+                "image_path": q["full_image"],
+            }
+        )
         if args.cot and model.reasoning_trace:
             reasoning_traces.append(
-                {
-                    "question_id": question["id"],
-                    "reasoning": (
-                        model.reasoning_trace[-1] if model.reasoning_trace else None
-                    ),
-                }
+                {"question_id": q["id"], "reasoning": model.reasoning_trace[-1]}
             )
-
-        # Print progress every 100 questions
         if (i + 1) % 100 == 0:
-            current_accuracy = sum(r["is_correct"] for r in results) / len(results)
-            print(
-                f"Progress: {i+1}/{len(questions)}, Current accuracy: {current_accuracy:.3f}"
-            )
-
-    # Clean up temporary image
-    if os.path.exists(current_image_path):
+            acc = sum(r["is_correct"] for r in results) / len(results)
+            print(f"Progress: {i+1}/{len(questions)} accuracy {acc:.3f}")
+    if current_image_path and os.path.exists(current_image_path):
         os.remove(current_image_path)
-
-    # Calculate final statistics
     total_correct = sum(r["is_correct"] for r in results)
     total_questions = len(results)
-    overall_accuracy = total_correct / total_questions if total_questions > 0 else 0
-
-    # Print final results
-    print("\n" + "=" * 50)
-    print("RAPM EVALUATION RESULTS")
-    print("=" * 50)
+    overall_acc = total_correct / total_questions if total_questions else 0
+    print("\n=== RAPM IMAGE RESULTS ===")
     print(f"Model: {args.model}")
-    print(f"Total questions: {total_questions}")
-    print(
-        f"Overall accuracy: {overall_accuracy:.3f} ({total_correct}/{total_questions})"
-    )
-    print("\nAccuracy by dataset type:")
-    for dataset_type in sorted(dataset_types):
-        type_accuracy = (
-            correct_by_type[dataset_type] / total_by_type[dataset_type]
-            if total_by_type[dataset_type] > 0
-            else 0
-        )
-        print(
-            f"  {dataset_type}: {type_accuracy:.3f} ({correct_by_type[dataset_type]}/{total_by_type[dataset_type]})"
-        )
-
-    # Prepare summary data
+    print(f"Overall accuracy: {overall_acc:.3f} ({total_correct}/{total_questions})")
+    for dt in sorted(dataset_types):
+        acc = correct_by_type[dt] / total_by_type[dt] if total_by_type[dt] else 0
+        print(f"  {dt}: {acc:.3f} ({correct_by_type[dt]}/{total_by_type[dt]})")
     summary = {
         "model": args.model,
         "model_source": args.model_source,
         "total_questions": total_questions,
         "total_correct": total_correct,
-        "overall_accuracy": overall_accuracy,
+        "overall_accuracy": overall_acc,
         "accuracy_by_type": {
-            dataset_type: {
-                "correct": correct_by_type[dataset_type],
-                "total": total_by_type[dataset_type],
+            dt: {
+                "correct": correct_by_type[dt],
+                "total": total_by_type[dt],
                 "accuracy": (
-                    correct_by_type[dataset_type] / total_by_type[dataset_type]
-                    if total_by_type[dataset_type] > 0
-                    else 0
+                    correct_by_type[dt] / total_by_type[dt] if total_by_type[dt] else 0
                 ),
             }
-            for dataset_type in dataset_types
+            for dt in dataset_types
         },
         "args": vars(args),
     }
-
     return results, summary, model.history, reasoning_traces
 
 
-# --- New: text RAPM evaluation ---
-def _reconstruct_cell_constraint(d: dict) -> CellConstraint:
-    """Rebuild a CellConstraint from a serialized describe() dict."""
-    return CellConstraint(
-        fixed_length=d.get("fixed_length"),
-        target_counts=d.get("target_counts", {}) or {},
-        parity_rules=d.get("parity_rules", {}) or {},
-        multiple_rules=d.get("multiple_rules", {}) or {},
-        unique_exact=d.get("unique_exact"),
-        ordering=d.get("ordering"),
-        positional_type=d.get("positional_type"),
-        positional_index_rule=d.get("positional_index_rule"),
-        # allowed_chars not serialized (size only), ignore
-    )
+# ---------------- Synchronous (text) ---------------- #
 
 
 def run_text_rapm_evaluation(args):
@@ -365,92 +178,45 @@ def run_text_rapm_evaluation(args):
         think_budget=args.think_budget,
         image_input=False,
     )
-    system_prompt = TEXT_RAPM_BASE_PROMPT
-    if args.patterns:
-        system_prompt += TEXT_RAPM_PATTERN_INFO
-    # Mode-specific instructions
-    if args.answer_mode == "mc":
-        system_prompt += TEXT_RAPM_MODE_INSTR_MC
-    else:
-        system_prompt += TEXT_RAPM_MODE_INSTR_GEN
-    if args.cot:
-        system_prompt += f"Explain your thought process (max {args.think_budget} tokens) inside <think>...</think> then final answer.\n"
-    else:
-        system_prompt += "Answer only with your final answer.\n"
+    system_prompt = build_text_system_prompt(args)
     results = []
     cat_correct = defaultdict(int)
     cat_total = defaultdict(int)
     reasoning_traces = []
-
-    for i, item in enumerate(tqdm(items, desc="Processing text RAPM")):
+    for item in tqdm(items, desc="Processing text RAPM"):
         model.init_chat(system_prompt)
-        grid = item["question_grid"]
-        # Format grid (None or missing bottom-right as '?')
-        rows_fmt = []
-        for r in range(3):
-            row_cells = []
-            for c in range(3):
-                v = grid[r][c]
-                if v is None:
-                    row_cells.append("?")
-                else:
-                    row_cells.append(v)
-            rows_fmt.append(" | ".join(row_cells))
-        grid_text = "\n".join(rows_fmt)
-        if args.answer_mode == "mc":
-            options = item["options"]
-            opt_lines = [f"{i+1}. {o}" for i, o in enumerate(options)]
-            prompt = (
-                f"Matrix:\n{grid_text}\n\nOptions:\n"
-                + "\n".join(opt_lines)
-                + "\n\nAnswer with <answer>N</answer>."
-            )
-        else:
-            prompt = (
-                f"Matrix:\n{grid_text}\n\nThe bottom-right cell should be generated. Provide only the inferred string in <answer>...</answer>."
-            )
-        response = model.send_message(prompt, cot=args.cot, truncate_history=True)
-        answer_match = re.search(r"<answer>(.*?)</answer>", response, flags=re.DOTALL)
+        prompt = format_text_item_prompt(item, args.answer_mode)
+        resp = model.send_message(prompt, cot=args.cot, truncate_history=True)
+        m = re.search(r"<answer>(.*?)</answer>", resp, re.DOTALL)
         predicted = None
         is_correct = False
         matches_gold = False
         constraint_valid = False
         if args.answer_mode == "mc":
-            if answer_match:
-                ans_txt = answer_match.group(1).strip()
-                nums = re.findall(r"\d+", ans_txt)
-                if nums:
-                    try:
-                        n = int(nums[0])
-                        if 1 <= n <= 8:
-                            predicted = n
-                    except ValueError:
-                        pass
-            correct_index = item["correct_index"]
-            is_correct = predicted is not None and (predicted - 1) == correct_index
-        else:  # generation mode
-            gold_answer = item["raw"].get("answer")
-            constraint_desc = (item["raw"].get("cell_constraints") or {}).get("2,2")
-            cell_constraint = _reconstruct_cell_constraint(constraint_desc) if constraint_desc else None
-            generated = None
-            if answer_match:
-                generated = answer_match.group(1).strip()
-                # remove surrounding quotes if model added them
-                if generated.startswith("\"") and generated.endswith("\"") and len(generated) >= 2:
-                    generated = generated[1:-1]
-                predicted = generated  # for result record
-                if cell_constraint and generated:
-                    constraint_valid = cell_satisfies(generated, cell_constraint)
-                matches_gold = generated == gold_answer
-                is_correct = constraint_valid  # primary criterion
-            correct_index = None  # not applicable
-        # Category extraction (if available)
-        raw = item["raw"]
+            predicted = parse_text_mc(m.group(1).strip() if m else None)
+            ci = item["correct_index"]
+            is_correct = predicted is not None and (predicted - 1) == ci
+        else:
+            gold = item["raw"].get("answer")
+            cdesc = (item["raw"].get("cell_constraints") or {}).get("2,2")
+            cell_constraint = reconstruct_cell_constraint(cdesc) if cdesc else None
+            if m:
+                gen = m.group(1).strip()
+                if gen.startswith('"') and gen.endswith('"') and len(gen) >= 2:
+                    gen = gen[1:-1]
+                predicted = gen
+                if cell_constraint and gen:
+                    from RAPM.text_rapm.validator import cell_satisfies
+
+                    constraint_valid = cell_satisfies(gen, cell_constraint)
+                matches_gold = gen == gold
+                is_correct = constraint_valid
+            ci = None
         cats = (
-            raw.get("credited_categories")
-            or raw.get("assigned_categories")
-            or [raw.get("primary_category")]
-            if raw.get("primary_category")
+            item["raw"].get("credited_categories")
+            or item["raw"].get("assigned_categories")
+            or [item["raw"].get("primary_category")]
+            if item["raw"].get("primary_category")
             else []
         )
         for c in cats:
@@ -462,10 +228,14 @@ def run_text_rapm_evaluation(args):
             {
                 "id": item["id"],
                 "predicted_answer": predicted,
-                "correct_index": correct_index,
-                **({"matches_gold": matches_gold, "constraint_valid": constraint_valid} if args.answer_mode == "gen" else {}),
+                "correct_index": ci,
+                **(
+                    {"matches_gold": matches_gold, "constraint_valid": constraint_valid}
+                    if args.answer_mode == "gen"
+                    else {}
+                ),
                 "is_correct": is_correct,
-                "response": response,
+                "response": resp,
                 "categories": cats,
             }
         )
@@ -473,19 +243,14 @@ def run_text_rapm_evaluation(args):
             reasoning_traces.append(
                 {"id": item["id"], "reasoning": model.reasoning_trace[-1]}
             )
-
     total_correct = sum(r["is_correct"] for r in results)
     total = len(results)
-    overall_accuracy = total_correct / total if total else 0
-    print("\n" + "=" * 50)
-    print("TEXT RAPM EVALUATION RESULTS")
-    print("=" * 50)
+    overall_acc = total_correct / total if total else 0
+    print("\n=== RAPM TEXT RESULTS ===")
     print(f"Model: {args.model}")
-    print(f"Total items: {total}")
-    print(f"Overall accuracy: {overall_accuracy:.3f} ({total_correct}/{total})")
+    print(f"Overall accuracy: {overall_acc:.3f} ({total_correct}/{total})")
     if cat_total:
-        print("\nAccuracy by category:")
-        for c in sorted(cat_total.keys()):
+        for c in sorted(cat_total):
             acc = cat_correct[c] / cat_total[c] if cat_total[c] else 0
             print(f"  {c}: {acc:.3f} ({cat_correct[c]}/{cat_total[c]})")
     summary = {
@@ -494,7 +259,7 @@ def run_text_rapm_evaluation(args):
         "answer_mode": args.answer_mode,
         "total": total,
         "correct": total_correct,
-        "overall_accuracy": overall_accuracy,
+        "overall_accuracy": overall_acc,
         "accuracy_by_category": {
             c: {
                 "correct": cat_correct[c],
@@ -508,87 +273,170 @@ def run_text_rapm_evaluation(args):
     return results, summary, model.history, reasoning_traces
 
 
+# ---------------- Batch submit / collect ---------------- #
+
+
+def batch_submit_rapm(args):
+    if args.model_source != "openai":
+        raise SystemExit("Batch mode only for openai source")
+    model = ModelWrapper(
+        args.model,
+        args.model_source,
+        api_key=args.api_key,
+        max_new_tokens=args.max_tokens,
+        think_budget=args.think_budget,
+        image_input=(args.mode == "image"),
+        # Provide image directory so ModelWrapper validation passes for image mode
+        image_path=(os.path.dirname(args.eval_data) if args.mode == "image" else None),
+    )
+    if args.mode == "image":
+        questions = load_evaluation_data(
+            args.eval_data,
+            limit_per_type=(args.limit_per_type if args.limit_per_type > 0 else None),
+        )
+        system_prompt = build_image_system_prompt(args)
+        requests = build_image_batch_requests(args, questions, system_prompt)
+        meta = {"task": "rapm_image", "count": str(len(questions)), "mode": "image"}
+    else:
+        items = load_text_rapm_jsonl(args.eval_data)
+        system_prompt = build_text_system_prompt(args)
+        requests = build_text_batch_requests(args, items, system_prompt)
+        meta = {"task": f"rapm_text_{args.answer_mode}", "count": str(len(items)), "mode": "text"}
+    model.batch_create_requests(requests, args.batch_requests_path)
+    batch_id = model.batch_submit(
+        args.batch_requests_path,
+        completion_window=args.batch_completion_window,
+        metadata=meta,
+    )
+    with open(args.batch_id_path, "w") as f:
+        f.write(batch_id)
+    print(f"Submitted batch id: {batch_id}")
+    return batch_id
+
+
+def batch_collect_rapm(args):
+    if args.model_source != "openai":
+        raise SystemExit("Batch mode only for openai source")
+    # Inspect batch metadata to ensure mode matches submission
+    temp_model = ModelWrapper(
+        args.model,
+        args.model_source,
+        api_key=args.api_key,
+        max_new_tokens=args.max_tokens,
+        think_budget=args.think_budget,
+        image_input=False,
+    )
+    try:
+        status_obj = temp_model.batch_status(args.batch_id)
+        meta = getattr(status_obj, "metadata", {}) or {}
+        submitted_mode = meta.get("mode") if isinstance(meta, dict) else None
+        if submitted_mode and submitted_mode != args.mode:
+            raise SystemExit(
+                f"Batch {args.batch_id} was submitted for mode '{submitted_mode}' but collect requested with mode '{args.mode}'. Rerun with --mode {submitted_mode}."
+            )
+    except Exception:
+        pass  # Non-fatal; proceed
+    if args.mode == "image":
+        questions = load_evaluation_data(
+            args.eval_data,
+            limit_per_type=(args.limit_per_type if args.limit_per_type > 0 else None),
+        )
+    else:
+        items = load_text_rapm_jsonl(args.eval_data)
+    model = ModelWrapper(
+        args.model,
+        args.model_source,
+        api_key=args.api_key,
+        max_new_tokens=args.max_tokens,
+        think_budget=args.think_budget,
+    image_input=(args.mode == "image"),
+    image_path=(os.path.dirname(args.eval_data) if args.mode == "image" else None),
+    )
+    parsed = model.batch_collect(
+        args.batch_id, output_jsonl_path=args.batch_output_jsonl
+    )
+    if isinstance(parsed, dict):  # status summary, not ready
+        print(parsed.get("message"))
+        # Return empty results with summary status so caller can decide to retry later
+        status_summary = {"batch_status": parsed, "args": vars(args)}
+        return [], status_summary, [], []
+    responses = {}
+    for obj in parsed:
+        cid = obj.get("custom_id")
+        if not cid:
+            continue
+        try:
+            idx = int(cid.rsplit("_", 1)[1])
+        except Exception:
+            continue
+        body = (obj.get("response") or {}).get("body") or {}
+        choices = body.get("choices") or []
+        if not choices:
+            responses[idx] = {"content": None}
+            continue
+        content = choices[0].get("message", {}).get("content")
+        responses[idx] = {"content": content}
+    if args.mode == "image":
+        results, s, reasoning_traces = score_image(questions, responses, args)
+        s["args"] = vars(args)
+        summary = s
+    else:
+        results, s, reasoning_traces = score_text(items, responses, args)
+        s["args"] = vars(args)
+        summary = s
+    return results, summary, [], reasoning_traces
+
+
+# ---------------- CLI ---------------- #
+
+
 def main():
-    parser = argparse.ArgumentParser(
-        description="Run RAPM evaluation on language models (image or text)"
+    p = argparse.ArgumentParser(description="Run RAPM evaluation (image or text)")
+    p.add_argument("--model", required=True)
+    p.add_argument(
+        "--model_source", default="openrouter", choices=["openai", "openrouter", "vllm"]
     )
-    parser.add_argument("--model", type=str, required=True, help="Model name")
-    parser.add_argument(
-        "--model_source",
-        type=str,
-        default="openrouter",
-        choices=["openai", "openrouter", "vllm"],
-        help="Model source",
-    )
-    parser.add_argument(
-        "--mode",
-        type=str,
-        default="image",
-        choices=["image", "text"],
-        help="Evaluation mode",
-    )
-    parser.add_argument(
-        "--eval_data",
-        type=str,
-        required=True,
-        help="Path to evaluation data (JSON for image, JSONL for text)",
-    )
-    parser.add_argument(
-        "--cot", action="store_true", help="Enable chain-of-thought reasoning"
-    )
-    parser.add_argument(
-        "--patterns",
-        action="store_true",
-        help="Include pattern category explanations in the system prompt",
-    )
-    parser.add_argument(
-        "--max_tokens", type=int, default=512, help="Maximum tokens to generate"
-    )
-    parser.add_argument(
-        "--think_budget",
-        type=int,
-        default=256,
-        help="Budget tokens for reasoning (when --cot)",
-    )
-    parser.add_argument("--api_key", type=str, default=None, help="API key")
-    parser.add_argument(
-        "--output_dir", type=str, default="rapm_data", help="Output directory"
-    )
-    parser.add_argument(
-        "--limit_per_type",
-        type=int,
-        default=100,
-        help="Limit per dataset type (image mode only; 0 = no limit)",
-    )
-    parser.add_argument(
+    p.add_argument("--mode", default="image", choices=["image", "text"])
+    p.add_argument("--eval_data", required=True)
+    p.add_argument("--cot", action="store_true")
+    p.add_argument("--patterns", action="store_true")
+    p.add_argument("--max_tokens", type=int, default=512)
+    p.add_argument("--think_budget", type=int, default=256)
+    p.add_argument("--api_key")
+    p.add_argument("--output_dir", default="rapm_data")
+    p.add_argument("--limit_per_type", type=int, default=100)
+    p.add_argument(
         "--answer_mode",
-        type=str,
         default="mc",
         choices=["mc", "gen"],
-        help="Answer mode for text RAPM: 'mc' (multiple-choice) or 'gen' (generate missing cell). Ignored in image mode.",
+        help="Text mode answer type",
     )
-    args = parser.parse_args()
+    # Batch
+    p.add_argument("--batch_mode", default="off", choices=["off", "submit", "collect"])
+    p.add_argument("--batch_requests_path", default="rapm_batch_requests.jsonl")
+    p.add_argument("--batch_id", default=None)
+    p.add_argument("--batch_id_path", default="rapm_batch_id.txt")
+    p.add_argument("--batch_output_jsonl", default="rapm_batch_output.jsonl")
+    p.add_argument("--batch_completion_window", default="24h")
+    args = p.parse_args()
 
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
-
-    base_name = f"{args.model_source}_{args.model.replace('/', '-')}_rapm_{args.mode}"
-    if args.mode == "text" and getattr(args, "answer_mode", "mc") == "gen":
-        base_name += "_gen"
+    os.makedirs(args.output_dir, exist_ok=True)
+    base = f"{args.model_source}_{args.model.replace('/', '-')}_rapm_{args.mode}"
+    if args.mode == "text" and args.answer_mode == "gen":
+        base += "_gen"
     if args.patterns:
-        base_name += "_pat"
+        base += "_pat"
     if args.cot:
-        base_name += "_cot"
-    results_path = os.path.join(args.output_dir, f"{base_name}_results.json")
-    summary_path = os.path.join(args.output_dir, f"{base_name}_summary.json")
-    history_path = os.path.join(args.output_dir, f"{base_name}_history.json")
-    reasoning_path = os.path.join(args.output_dir, f"{base_name}_reasoning.json")
+        base += "_cot"
+    results_path = os.path.join(args.output_dir, f"{base}_results.json")
+    summary_path = os.path.join(args.output_dir, f"{base}_summary.json")
+    history_path = os.path.join(args.output_dir, f"{base}_history.json")
+    reasoning_path = os.path.join(args.output_dir, f"{base}_reasoning.json")
 
-    if os.path.exists(results_path):
+    if os.path.exists(results_path) and args.batch_mode == "off":
         print(f"Results already exist at {results_path}")
         with open(summary_path, "r") as f:
             summary = json.load(f)
-        print("\nExisting Results Summary:")
         if args.mode == "image":
             print(
                 f"Overall accuracy: {summary['overall_accuracy']:.3f} ({summary['total_correct']}/{summary['total_questions']})"
@@ -599,12 +447,31 @@ def main():
             )
         return
 
-    if args.mode == "image":
-        print("Starting image RAPM evaluation...")
-        results, summary, history, reasoning_traces = run_rapm_evaluation(args)
+    if args.batch_mode == "submit":
+        bid = batch_submit_rapm(args)
+        print(f"Batch submitted. ID: {bid}")
+        return
+    if args.batch_mode == "collect":
+        if not args.batch_id:
+            if os.path.exists(args.batch_id_path):
+                with open(args.batch_id_path, "r") as f:
+                    args.batch_id = f.read().strip()
+            else:
+                raise SystemExit("--batch_id not provided and batch id file missing")
+        print(f"Collecting batch {args.batch_id} ...")
+        results, summary, history, reasoning_traces = batch_collect_rapm(args)
+        base += "_batch"
+        results_path = os.path.join(args.output_dir, f"{base}_results.json")
+        summary_path = os.path.join(args.output_dir, f"{base}_summary.json")
+        history_path = os.path.join(args.output_dir, f"{base}_history.json")
+        reasoning_path = os.path.join(args.output_dir, f"{base}_reasoning.json")
     else:
-        print("Starting text RAPM evaluation...")
-        results, summary, history, reasoning_traces = run_text_rapm_evaluation(args)
+        if args.mode == "image":
+            print("Starting image RAPM evaluation...")
+            results, summary, history, reasoning_traces = run_rapm_evaluation(args)
+        else:
+            print("Starting text RAPM evaluation...")
+            results, summary, history, reasoning_traces = run_text_rapm_evaluation(args)
 
     with open(results_path, "w") as f:
         json.dump(results, f, indent=2)
