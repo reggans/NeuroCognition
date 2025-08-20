@@ -131,18 +131,22 @@ class ModelWrapper:
             if model_source == "vllm":
                 api_key = "dummy"  # VLLM doesn't need a real API key
                 base_url = f"http://{os.getenv('VLLM_URL')}:8877/v1"
-            else:
+            elif model_source == "openai":
                 if api_key is None:
-                    api_key = os.getenv("OPENAI_API_KEY") or os.getenv(
-                        "OPENROUTER_API_KEY"
-                    )
+                    api_key = os.getenv("OPENAI_API_KEY")
                     if api_key is None:
                         raise ValueError(
-                            "Please set the OPENAI_API_KEY or OPENROUTER_API_KEY environment variable or pass it to the CLI."
+                            "Please set the OPENAI_API_KEY environment variable for OpenAI or pass it to the CLI."
                         )
                 base_url = None
-                if model_source == "openrouter":
-                    base_url = "https://openrouter.ai/api/v1"
+            else:
+                if api_key is None:
+                    api_key = os.getenv("OPENROUTER_API_KEY")
+                    if api_key is None:
+                        raise ValueError(
+                            "Please set the OPENROUTER_API_KEY environment variable for OpenRouter or pass it to the CLI."
+                        )
+                base_url = "https://openrouter.ai/api/v1"
 
             self.client = openai.OpenAI(
                 api_key=api_key,
@@ -214,7 +218,6 @@ class ModelWrapper:
                     max_completion_tokens=max_new_tokens or self.max_new_tokens,
                     extra_body=extra_body,
                 )
-                print(raw_resp.choices[0].finish_reason)
                 raw_response = raw_resp.choices[0].message.content
             except:
                 time.sleep(5)
@@ -224,7 +227,6 @@ class ModelWrapper:
                     max_completion_tokens=max_new_tokens or self.max_new_tokens,
                     extra_body=extra_body,
                 )
-                print(raw_resp.choices[0].finish_reason)
                 raw_response = raw_resp.choices[0].message.content
         else:
             try:
@@ -236,7 +238,6 @@ class ModelWrapper:
                     # top_p=0.95,
                     extra_body=extra_body,
                 )
-                print(raw_resp.choices[0].finish_reason)
                 if raw_resp.choices[0].finish_reason == "error":
                     print(raw_resp)
                     print(
@@ -254,7 +255,6 @@ class ModelWrapper:
                     # top_p=0.95,
                     extra_body=extra_body,
                 )
-                print(raw_resp.choices[0].finish_reason)
                 if raw_resp.choices[0].finish_reason == "error":
                     print(raw_resp)
                     print(
