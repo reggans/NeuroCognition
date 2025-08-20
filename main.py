@@ -301,6 +301,43 @@ Examples:
         choices=["mc", "gen"],
         help="Text RAPM only: 'mc' for multiple-choice, 'gen' to generate the missing cell directly.",
     )
+    rapm_parser.add_argument(
+        "--batch_mode",
+        type=str,
+        default="off",
+        choices=["off", "submit", "collect"],
+        help="OpenAI Batch API mode for RAPM (off/submit/collect).",
+    )
+    rapm_parser.add_argument(
+        "--batch_requests_path",
+        type=str,
+        default="rapm_batch_requests.jsonl",
+        help="Path to write RAPM batch requests JSONL (submit).",
+    )
+    rapm_parser.add_argument(
+        "--batch_id",
+        type=str,
+        default=None,
+        help="Batch id for collection (if omitted, read from --batch_id_path).",
+    )
+    rapm_parser.add_argument(
+        "--batch_id_path",
+        type=str,
+        default="rapm_batch_id.txt",
+        help="File to store/read batch id when using submit/collect.",
+    )
+    rapm_parser.add_argument(
+        "--batch_output_jsonl",
+        type=str,
+        default="rapm_batch_output.jsonl",
+        help="Where to save raw batch output JSONL during collection.",
+    )
+    rapm_parser.add_argument(
+        "--batch_completion_window",
+        type=str,
+        default="24h",
+        help="Batch completion window request (e.g. 24h).",
+    )
 
     args = parser.parse_args()
 
@@ -413,15 +450,34 @@ Examples:
         summary_path = os.path.join(args.output_dir, f"{base_name}_summary.json")
         history_path = os.path.join(args.output_dir, f"{base_name}_history.json")
         reasoning_path = os.path.join(args.output_dir, f"{base_name}_reasoning.json")
-        if os.path.exists(results_path):
+        if os.path.exists(results_path) and args.batch_mode == "off":
             print(f"Results already exist at {results_path}")
             return
-        if args.mode == "image":
-            print("Starting RAPM image evaluation...")
-            results, summary, history, reasoning_traces = run_rapm_evaluation(args)  # type: ignore
+        # Defer to module's batch logic by reusing its CLI style flow
+        from RAPM.rapm_evaluation import batch_submit_rapm, batch_collect_rapm  # type: ignore
+        if args.batch_mode == "submit":
+            batch_id = batch_submit_rapm(args)
+            print(f"Submitted RAPM batch {batch_id}")
+            return
+        if args.batch_mode == "collect":
+            if not args.batch_id and os.path.exists(args.batch_id_path):
+                with open(args.batch_id_path, "r") as f:
+                    args.batch_id = f.read().strip()
+            if not args.batch_id:
+                raise SystemExit("No batch id provided or stored.")
+            results, summary, history, reasoning_traces = batch_collect_rapm(args)
+            base_name += "_batch"
+            results_path = os.path.join(args.output_dir, f"{base_name}_results.json")
+            summary_path = os.path.join(args.output_dir, f"{base_name}_summary.json")
+            history_path = os.path.join(args.output_dir, f"{base_name}_history.json")
+            reasoning_path = os.path.join(args.output_dir, f"{base_name}_reasoning.json")
         else:
-            print("Starting RAPM text evaluation...")
-            results, summary, history, reasoning_traces = run_text_rapm_evaluation(args)  # type: ignore
+            if args.mode == "image":
+                print("Starting RAPM image evaluation...")
+                results, summary, history, reasoning_traces = run_rapm_evaluation(args)  # type: ignore
+            else:
+                print("Starting RAPM text evaluation...")
+                results, summary, history, reasoning_traces = run_text_rapm_evaluation(args)  # type: ignore
         with open(results_path, "w") as f:
             json.dump(results, f, indent=2)
         with open(summary_path, "w") as f:
