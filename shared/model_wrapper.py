@@ -318,3 +318,191 @@ class ModelWrapper:
         )
 
         return raw_response
+
+    # --------------------------- Batch API helpers --------------------------- #
+    def batch_create_requests(self, request_specs, jsonl_path: str):
+        """Create a JSONL file for OpenAI Batch API.
+
+        Args:
+            request_specs: iterable of dicts with keys:
+               custom_id (str) unique
+               messages (list) OpenAI chat messages
+               max_completion_tokens (int) optional
+               temperature (float) optional
+               extra_body (dict) optional
+            jsonl_path: destination path for requests file
+
+        Note: Only supported for model_source == 'openai'.
+        """
+        if self.model_source != "openai":
+            raise ValueError("Batch API currently only supported for OpenAI source")
+        with open(jsonl_path, "w", encoding="utf-8") as f:
+            for spec in request_specs:
+                body = {
+                    "model": self.model_name,
+                    "messages": spec["messages"],
+                    "max_completion_tokens": spec.get(
+                        "max_completion_tokens", self.max_new_tokens
+                    ),
+                }
+                # Merge any additional provided body keys (e.g., reasoning)
+                extra = spec.get("extra_body") or {}
+                if extra:
+                    body.update(extra)
+                line = {
+                    "custom_id": spec["custom_id"],
+                    "method": "POST",
+                    "url": "/v1/chat/completions",
+                    "body": body,
+                }
+                f.write(json.dumps(line) + "\n")
+
+    def batch_submit(
+        self,
+        jsonl_path: str,
+        completion_window: str = "24h",
+        metadata: dict | None = None,
+    ):
+        """Submit a previously created JSONL requests file to OpenAI Batch API.
+
+        Returns: batch id (str)
+        """
+        if self.model_source != "openai":
+            raise ValueError("Batch API currently only supported for OpenAI source")
+        upload = self.client.files.create(file=open(jsonl_path, "rb"), purpose="batch")  # type: ignore
+        batch = self.client.batches.create(  # type: ignore
+            input_file_id=upload.id,
+            endpoint="/v1/chat/completions",
+            completion_window=completion_window,
+            metadata=metadata or {},
+        )
+        return batch.id
+
+    def batch_status(self, batch_id: str):
+        if self.model_source != "openai":
+            raise ValueError("Batch API currently only supported for OpenAI source")
+        return self.client.batches.retrieve(batch_id)  # type: ignore
+
+    def batch_collect(self, batch_id: str, output_jsonl_path: str | None = None):
+        """Attempt to collect batch responses.
+
+        If the batch is not yet completed, returns a status summary dict instead
+        of waiting. This avoids blocking when the user just wants progress.
+
+        Returns:
+            list[dict]    -> when completed (parsed JSONL lines)
+            dict          -> when not completed or failed, keys include:
+                              status, processed, pending, total, failed, message
+        """
+        if self.model_source != "openai":
+            raise ValueError("Batch API currently only supported for OpenAI source")
+
+        batch = self.client.batches.retrieve(batch_id)  # type: ignore
+        print(batch)
+        status = getattr(batch, "status", None)
+        # Attempt to read request counts (structure may vary)
+        counts = getattr(batch, "request_counts", {}) or {}
+
+        def _c(obj, *names):
+            for n in names:
+                if isinstance(obj, dict) and n in obj:
+                    return obj[n] or 0
+                if hasattr(obj, n):
+                    try:
+                        val = getattr(obj, n)
+                        if val is not None:
+                            return val
+                    except Exception:
+                        pass
+            return 0
+
+        total = _c(counts, "total", "requested")
+        completed = _c(counts, "completed", "succeeded")
+        failed = _c(counts, "failed")
+        processed = completed + failed
+        pending = max(total - processed, 0) if total else None
+
+        if status != "completed":
+            return {
+                "status": status,
+                "processed": processed,
+                "failed": failed,
+                "pending": pending,
+                "total": total,
+                "message": f"Batch {batch_id} not ready (status={status}). Processed={processed} Failed={failed} Pending={pending} Total={total}",
+            }
+
+        # Completed: extract output file id (support legacy / future variants)
+        output_file_id = getattr(batch, "output_file_id", None) or getattr(
+            batch, "output_file_ids", None
+        )
+        if isinstance(output_file_id, list):
+            output_file_id = output_file_id[0] if output_file_id else None
+        # If no output file, check for error file and surface its contents
+        if not output_file_id:
+            error_file_id = getattr(batch, "error_file_id", None) or getattr(
+                batch, "error_file_ids", None
+            )
+            if isinstance(error_file_id, list):
+                error_file_id = error_file_id[0] if error_file_id else None
+            if error_file_id:
+                try:
+                    err_content = self.client.files.content(error_file_id)  # type: ignore
+                    err_bytes = err_content.read()
+                    err_text = err_bytes.decode("utf-8", errors="replace")
+                    # Optionally write errors to a sidecar file if an output path was provided
+                    if output_jsonl_path:
+                        err_path = output_jsonl_path + ".errors"
+                        with open(err_path, "w", encoding="utf-8") as ef:
+                            ef.write(err_text)
+                    parsed_errors = []
+                    for line in err_text.splitlines():
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            parsed_errors.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            parsed_errors.append({"unparsed": line})
+                    return {
+                        "status": status,
+                        "processed": processed,
+                        "failed": failed,
+                        "pending": pending,
+                        "total": total,
+                        "errors": parsed_errors,
+                        "message": f"Batch {batch_id} completed with errors only (no output file). Parsed {len(parsed_errors)} error lines.",
+                    }
+                except Exception as e:
+                    return {
+                        "status": status,
+                        "processed": processed,
+                        "failed": failed,
+                        "pending": pending,
+                        "total": total,
+                        "message": f"Batch {batch_id} completed but error file retrieval failed: {e}",
+                    }
+            return {
+                "status": status,
+                "processed": processed,
+                "failed": failed,
+                "pending": pending,
+                "total": total,
+                "message": f"Batch {batch_id} completed but no output or error file id present yet.",
+            }
+        file_content = self.client.files.content(output_file_id)  # type: ignore
+        raw_bytes = file_content.read()
+        text = raw_bytes.decode("utf-8")
+        if output_jsonl_path:
+            with open(output_jsonl_path, "w", encoding="utf-8") as f:
+                f.write(text)
+        parsed = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return parsed
