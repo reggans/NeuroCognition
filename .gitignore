@@ -178,5 +178,6 @@ SWM/images/
 WCST/images/
 viz.ipynb
 test_rapm_data.json
+sample_text_rapm.jsonl
 api_calc.ipynb
 *.sh
