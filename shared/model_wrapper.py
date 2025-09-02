@@ -286,6 +286,7 @@ class ModelWrapper:
                         {"user_message": message, "reasoning": raw_response.strip()}
                     )
 
+        response = raw_response
         # Parse response
         if truncate_history:
             # Remove reasoning trace and get content after </think> or </thinking>
