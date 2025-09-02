@@ -218,7 +218,7 @@ Examples:
             )
     elif args.test == "swm":
         # Delegate to SWM package runner which handles runs and saving results
-        from SWM.SWM.main import swm_main  # type: ignore
+        from SWM.main import swm_main  # type: ignore
 
         swm_main(
             model=args.model,
