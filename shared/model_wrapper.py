@@ -173,6 +173,7 @@ class ModelWrapper:
 
         # Store original response
         raw_response = None
+        raw_reasoning = None
         if self.image_input:
             image_file_path = os.path.join(self.image_path, "current.png")
             base64_image = encode_image_to_base64(image_file_path)
