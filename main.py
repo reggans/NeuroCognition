@@ -217,64 +217,22 @@ Examples:
                 verbose=args.verbose,
             )
     elif args.test == "swm":
-        # Import SWM only when needed to avoid importing OpenAI client on --help or other commands
-        from SWM.SWM.swm import (
-            text_swm as swm_text,
-            image_swm as swm_image,
-            score as swm_score,
+        # Delegate to SWM package runner which handles runs and saving results
+        from SWM.SWM.main import swm_main  # type: ignore
+
+        swm_main(
+            model=args.model,
+            model_source=args.model_source,
+            n_boxes=args.n_boxes,
+            n_tokens=args.n_tokens,
+            cot=args.cot,
+            runs=args.runs,
+            max_tokens=args.max_tokens,
+            think_budget=args.think_budget,
+            notes=args.notes,
+            image=args.image,
+            api_key=args.api_key,
         )
-        from shared.model_wrapper import ModelWrapper
-
-        # run multiple runs using legacy functions
-        if args.model is None:
-            if args.model_source == "vllm":
-                args.model = "Qwen/Qwen3-32B"
-            elif args.model_source == "openai":
-                args.model = "o4-mini-2025-04-16"
-            else:
-                args.model = "qwen/qwen3-235b-a22b-07-25"
-        img_path = "SWM/images" if args.image else None
-        run_stats = {}
-        for i in range(args.runs):
-            # Lazily clear CUDA cache if torch is available
-            try:
-                import torch  # type: ignore
-
-                torch.cuda.empty_cache()
-            except Exception:
-                pass
-            model = ModelWrapper(
-                args.model,
-                args.model_source,
-                api_key=args.api_key,
-                max_new_tokens=args.max_tokens,
-                image_input=args.image,
-                image_path=img_path,
-            )
-            if args.image:
-                run_stats[f"run_{i+1}"] = swm_image(
-                    model,
-                    args.n_boxes,
-                    n_tokens=args.n_tokens,
-                    cot=args.cot,
-                    think_budget=args.think_budget,
-                    note_assist=args.notes,
-                )
-            else:
-                run_stats[f"run_{i+1}"] = swm_text(
-                    model,
-                    args.n_boxes,
-                    n_tokens=args.n_tokens,
-                    cot=args.cot,
-                    think_budget=args.think_budget,
-                    note_assist=args.notes,
-                )
-        # simple aggregate output
-        # Import numpy lazily here to avoid dependency on --help or other commands
-        import numpy as np  # type: ignore
-
-        avg = np.mean([swm_score(s) for s in run_stats.values()])
-        print(f"Average SWM score over {args.runs} runs: {avg:.4f}")
     elif args.test == "rapm":
         # Validate RAPM availability
         if args.mode == "image" and (run_rapm_evaluation is None):
