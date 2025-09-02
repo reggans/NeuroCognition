@@ -31,7 +31,7 @@ def parse_setup(filename):
 
 
 def analyze_results():
-    data_dir = Path("./data/text")
+    data_dir = Path("./SWM/data/text")
     if not data_dir.exists():
         raise FileNotFoundError("Data directory not found")
 
