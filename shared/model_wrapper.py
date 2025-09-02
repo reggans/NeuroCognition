@@ -369,7 +369,8 @@ class ModelWrapper:
         """
         if self.model_source != "openai":
             raise ValueError("Batch API currently only supported for OpenAI source")
-        upload = self.client.files.create(file=open(jsonl_path, "rb"), purpose="batch")  # type: ignore
+        with open(jsonl_path, "rb") as f:
+            upload = self.client.files.create(file=f, purpose="batch")  # type: ignore
         batch = self.client.batches.create(  # type: ignore
             input_file_id=upload.id,
             endpoint="/v1/chat/completions",
