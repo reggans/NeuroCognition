@@ -4,6 +4,7 @@ Main script to run cognitive evaluation tests.
 Supports:
 - Wisconsin Card Sorting Test (WCST)
 - Spatial Working Memory (SWM)
+- Raven's Progressive Matrices (RAPM) image & text variants
 
 This file merged legacy SWM runner and new orchestrator. The legacy SWM run/score
 functions moved into run_swm / score for backward compatibility.
@@ -29,6 +30,15 @@ try:
     from swm import image_swm  # legacy image mode
 except Exception:
     image_swm = None  # type: ignore
+
+# RAPM imports
+try:
+    from RAPM.rapm_evaluation import (
+        run_rapm_evaluation,
+        run_text_rapm_evaluation,
+    )
+except ImportError:
+    run_rapm_evaluation = run_text_rapm_evaluation = None  # type: ignore
 
 # ---------------- Legacy SWM implementation (from HEAD) ---------------- #
 
@@ -255,6 +265,80 @@ Examples:
     swm_parser.add_argument("--image", action="store_true")
     swm_parser.add_argument("--api_key", type=str, default=None)
 
+    # RAPM parser
+    rapm_parser = subparsers.add_parser("rapm", help="Run Raven's Progressive Matrices (image or text)")
+    rapm_parser.add_argument("--model", type=str, default=None, help="Model name")
+    rapm_parser.add_argument(
+        "--model_source",
+        type=str,
+        default="vllm",
+        choices=["vllm", "openai", "openrouter"],
+    )
+    rapm_parser.add_argument(
+        "--mode", type=str, default="image", choices=["image", "text"], help="RAPM mode: image JSON or text JSONL"
+    )
+    rapm_parser.add_argument(
+        "--eval_data", type=str, required=True, help="Path to RAPM data file (JSON for image, JSONL for text)"
+    )
+    rapm_parser.add_argument("--cot", action="store_true", help="Enable chain-of-thought reasoning")
+    rapm_parser.add_argument(
+        "--patterns", action="store_true", help="Include pattern archetype descriptions in system prompt"
+    )
+    rapm_parser.add_argument("--max_tokens", type=int, default=512)
+    rapm_parser.add_argument("--think_budget", type=int, default=256)
+    rapm_parser.add_argument("--api_key", type=str, default=None)
+    rapm_parser.add_argument(
+        "--limit_per_type", type=int, default=100, help="Limit per dataset type (image mode only; 0 = no limit)"
+    )
+    rapm_parser.add_argument(
+        "--output_dir", type=str, default="rapm_data", help="Directory to write RAPM results"
+    )
+    rapm_parser.add_argument("--verbose", type=int, default=15)
+    rapm_parser.add_argument(
+        "--answer_mode",
+        type=str,
+        default="mc",
+        choices=["mc", "gen"],
+        help="Text RAPM only: 'mc' for multiple-choice, 'gen' to generate the missing cell directly.",
+    )
+    rapm_parser.add_argument(
+        "--batch_mode",
+        type=str,
+        default="off",
+        choices=["off", "submit", "collect"],
+        help="OpenAI Batch API mode for RAPM (off/submit/collect).",
+    )
+    rapm_parser.add_argument(
+        "--batch_requests_path",
+        type=str,
+        default="rapm_batch_requests.jsonl",
+        help="Path to write RAPM batch requests JSONL (submit).",
+    )
+    rapm_parser.add_argument(
+        "--batch_id",
+        type=str,
+        default=None,
+        help="Batch id for collection (if omitted, read from --batch_id_path).",
+    )
+    rapm_parser.add_argument(
+        "--batch_id_path",
+        type=str,
+        default="rapm_batch_id.txt",
+        help="File to store/read batch id when using submit/collect.",
+    )
+    rapm_parser.add_argument(
+        "--batch_output_jsonl",
+        type=str,
+        default="rapm_batch_output.jsonl",
+        help="Where to save raw batch output JSONL during collection.",
+    )
+    rapm_parser.add_argument(
+        "--batch_completion_window",
+        type=str,
+        default="24h",
+        help="Batch completion window request (e.g. 24h).",
+    )
+
     args = parser.parse_args()
 
     if args.test == "wcst":
@@ -339,6 +423,71 @@ Examples:
         # simple aggregate output
         avg = np.mean([score(s) for s in run_stats.values()])
         print(f"Average SWM score over {args.runs} runs: {avg:.4f}")
+    elif args.test == "rapm":
+        # Validate RAPM availability
+        if args.mode == "image" and (run_rapm_evaluation is None):
+            raise SystemExit("RAPM image evaluation function not available")
+        if args.mode == "text" and (run_text_rapm_evaluation is None):
+            raise SystemExit("RAPM text evaluation function not available")
+        # Default model if not provided
+        if args.model is None:
+            if args.model_source == "vllm":
+                args.model = "Qwen/Qwen3-32B"
+            elif args.model_source == "openai":
+                args.model = "o4-mini-2025-04-16"
+            else:
+                args.model = "qwen/qwen3-235b-a22b-07-25"
+        if not os.path.exists(args.output_dir):
+            os.makedirs(args.output_dir)
+        base_name = f"{args.model_source}_{args.model.replace('/', '-')}_rapm_{args.mode}"
+        if args.mode == "text" and getattr(args, "answer_mode", "mc") == "gen":
+            base_name += "_gen"
+        if args.patterns:
+            base_name += "_pat"
+        if args.cot:
+            base_name += "_cot"
+        results_path = os.path.join(args.output_dir, f"{base_name}_results.json")
+        summary_path = os.path.join(args.output_dir, f"{base_name}_summary.json")
+        history_path = os.path.join(args.output_dir, f"{base_name}_history.json")
+        reasoning_path = os.path.join(args.output_dir, f"{base_name}_reasoning.json")
+        if os.path.exists(results_path) and args.batch_mode == "off":
+            print(f"Results already exist at {results_path}")
+            return
+        # Defer to module's batch logic by reusing its CLI style flow
+        from RAPM.rapm_evaluation import batch_submit_rapm, batch_collect_rapm  # type: ignore
+        if args.batch_mode == "submit":
+            batch_id = batch_submit_rapm(args)
+            print(f"Submitted RAPM batch {batch_id}")
+            return
+        if args.batch_mode == "collect":
+            if not args.batch_id and os.path.exists(args.batch_id_path):
+                with open(args.batch_id_path, "r") as f:
+                    args.batch_id = f.read().strip()
+            if not args.batch_id:
+                raise SystemExit("No batch id provided or stored.")
+            results, summary, history, reasoning_traces = batch_collect_rapm(args)
+            base_name += "_batch"
+            results_path = os.path.join(args.output_dir, f"{base_name}_results.json")
+            summary_path = os.path.join(args.output_dir, f"{base_name}_summary.json")
+            history_path = os.path.join(args.output_dir, f"{base_name}_history.json")
+            reasoning_path = os.path.join(args.output_dir, f"{base_name}_reasoning.json")
+        else:
+            if args.mode == "image":
+                print("Starting RAPM image evaluation...")
+                results, summary, history, reasoning_traces = run_rapm_evaluation(args)  # type: ignore
+            else:
+                print("Starting RAPM text evaluation...")
+                results, summary, history, reasoning_traces = run_text_rapm_evaluation(args)  # type: ignore
+        with open(results_path, "w") as f:
+            json.dump(results, f, indent=2)
+        with open(summary_path, "w") as f:
+            json.dump(summary, f, indent=2)
+        with open(history_path, "w") as f:
+            json.dump(history, f, indent=2)
+        if reasoning_traces:
+            with open(reasoning_path, "w") as f:
+                json.dump(reasoning_traces, f, indent=2)
+        print("RAPM evaluation complete!")
 
 
 if __name__ == "__main__":
