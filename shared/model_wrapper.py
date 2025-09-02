@@ -6,6 +6,7 @@ import base64
 import json
 from typing import List, Dict
 
+
 def validate_message_turns(messages: List[Dict], save_error: bool = True) -> bool:
     """
     Validates that messages alternate properly between user and assistant/model roles.
@@ -65,10 +66,10 @@ def validate_message_turns(messages: List[Dict], save_error: bool = True) -> boo
 def encode_image_to_base64(image_path: str) -> str:
     """
     Encode an image file to base64 string with proper data URL format.
-    
+
     Args:
         image_path: Path to the image file
-        
+
     Returns:
         str: Base64 encoded image as data URL (data:image/png;base64,...)
     """
@@ -77,21 +78,21 @@ def encode_image_to_base64(image_path: str) -> str:
             # Read the image file
             image_data = image_file.read()
             # Encode to base64
-            base64_string = base64.b64encode(image_data).decode('utf-8')
+            base64_string = base64.b64encode(image_data).decode("utf-8")
             # Determine the image format from file extension
             file_extension = os.path.splitext(image_path)[1].lower()
-            if file_extension == '.png':
-                mime_type = 'image/png'
-            elif file_extension in ['.jpg', '.jpeg']:
-                mime_type = 'image/jpeg'
-            elif file_extension == '.gif':
-                mime_type = 'image/gif'
-            elif file_extension == '.webp':
-                mime_type = 'image/webp'
+            if file_extension == ".png":
+                mime_type = "image/png"
+            elif file_extension in [".jpg", ".jpeg"]:
+                mime_type = "image/jpeg"
+            elif file_extension == ".gif":
+                mime_type = "image/gif"
+            elif file_extension == ".webp":
+                mime_type = "image/webp"
             else:
                 # Default to png if unknown
-                mime_type = 'image/png'
-            
+                mime_type = "image/png"
+
             # Return as data URL
             return f"data:{mime_type};base64,{base64_string}"
     except Exception as e:
@@ -130,18 +131,22 @@ class ModelWrapper:
             if model_source == "vllm":
                 api_key = "dummy"  # VLLM doesn't need a real API key
                 base_url = f"http://{os.getenv('VLLM_URL')}:8877/v1"
-            else:
+            elif model_source == "openai":
                 if api_key is None:
-                    api_key = os.getenv("OPENAI_API_KEY") or os.getenv(
-                        "OPENROUTER_API_KEY"
-                    )
+                    api_key = os.getenv("OPENAI_API_KEY")
                     if api_key is None:
                         raise ValueError(
-                            "Please set the OPENAI_API_KEY or OPENROUTER_API_KEY environment variable or pass it to the CLI."
+                            "Please set the OPENAI_API_KEY environment variable for OpenAI or pass it to the CLI."
                         )
                 base_url = None
-                if model_source == "openrouter":
-                    base_url = "https://openrouter.ai/api/v1"
+            else:
+                if api_key is None:
+                    api_key = os.getenv("OPENROUTER_API_KEY")
+                    if api_key is None:
+                        raise ValueError(
+                            "Please set the OPENROUTER_API_KEY environment variable for OpenRouter or pass it to the CLI."
+                        )
+                base_url = "https://openrouter.ai/api/v1"
 
             self.client = openai.OpenAI(
                 api_key=api_key,
@@ -168,22 +173,24 @@ class ModelWrapper:
 
         # Store original response
         raw_response = None
-
         if self.image_input:
             image_file_path = os.path.join(self.image_path, "current.png")
             base64_image = encode_image_to_base64(image_file_path)
+            content = []
+            if message:
+                content.append({"type": "text", "text": message})
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": base64_image,
+                    },
+                }
+            )
             self.history.append(
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": message},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": base64_image
-                            },
-                        },
-                    ],
+                    "content": content,
                 }
             )
         else:
@@ -205,67 +212,78 @@ class ModelWrapper:
                 extra_body = {"reasoning": {"enabled": False}}
         if self.model_source == "openai":
             try:
-                raw_response = self.client.chat.completions.create(
+                raw_resp = self.client.chat.completions.create(
                     model=self.model_name,
                     messages=self.history,
                     max_completion_tokens=max_new_tokens or self.max_new_tokens,
                     extra_body=extra_body,
                 )
-                print(raw_response.choices[0].finish_reason)
-                raw_response = raw_response.choices[0].message.content
-                print(raw_response)
+                raw_response = raw_resp.choices[0].message.content
             except:
                 time.sleep(5)
-                raw_response = self.client.chat.completions.create(
+                raw_resp = self.client.chat.completions.create(
                     model=self.model_name,
                     messages=self.history,
                     max_completion_tokens=max_new_tokens or self.max_new_tokens,
                     extra_body=extra_body,
                 )
-                print(raw_response.choices[0].finish_reason)
-                raw_response = raw_response.choices[0].message.content
-                print(raw_response)
+                raw_response = raw_resp.choices[0].message.content
         else:
             try:
-                raw_response = self.client.chat.completions.create(
+                raw_resp = self.client.chat.completions.create(
                     model=self.model_name,
                     messages=self.history,
                     max_tokens=max_new_tokens or self.max_new_tokens,
-                    temperature=0.6,
-                    top_p=0.95,
+                    temperature=0.0,
+                    # top_p=0.95,
                     extra_body=extra_body,
                 )
-                print(raw_response.choices[0].finish_reason)
-                raw_response = raw_response.choices[0].message.content
-                print(raw_response)
+                if raw_resp.choices[0].finish_reason == "error":
+                    print(raw_resp)
+                    print(
+                        f"Model returned error: {raw_resp.choices[0].message.content}"
+                    )
+                raw_response = raw_resp.choices[0].message.content
+                raw_reasoning = raw_resp.choices[0].message.reasoning
             except:
                 time.sleep(5)
-                raw_response = self.client.chat.completions.create(
+                raw_resp = self.client.chat.completions.create(
                     model=self.model_name,
                     messages=self.history,
                     max_tokens=max_new_tokens or self.max_new_tokens,
-                    temperature=0.6,
-                    top_p=0.95,
+                    temperature=0.0,
+                    # top_p=0.95,
                     extra_body=extra_body,
                 )
-                print(raw_response.choices[0].finish_reason)
-                raw_response = raw_response.choices[0].message.content
-                print(raw_response)
+                if raw_resp.choices[0].finish_reason == "error":
+                    print(raw_resp)
+                    print(
+                        f"Model returned error: {raw_resp.choices[0].message.content}"
+                    )
+                raw_response = raw_resp.choices[0].message.content
+                raw_reasoning = raw_resp.choices[0].message.reasoning
 
         # Add this code after getting raw_response but before updating history
         if cot:
-            # Extract reasoning trace from response
-            trace = re.search(r"<think>(.*?)</think>", raw_response, re.DOTALL)
-            if not trace:
-                trace = re.search(r"<thinking>(.*?)</thinking>", raw_response, re.DOTALL)
-            if trace:
+            if raw_reasoning:
                 self.reasoning_trace.append(
-                    {"user_message": message, "reasoning": trace.group(1).strip()}
+                    {"user_message": message, "reasoning": raw_reasoning.strip()}
                 )
             else:
-                self.reasoning_trace.append(
-                    {"user_message": message, "reasoning": raw_response.strip()}
-                )
+                # Extract reasoning trace from response
+                trace = re.search(r"<think>(.*?)</think>", raw_response, re.DOTALL)
+                if not trace:
+                    trace = re.search(
+                        r"<thinking>(.*?)</thinking>", raw_response, re.DOTALL
+                    )
+                if trace:
+                    self.reasoning_trace.append(
+                        {"user_message": message, "reasoning": trace.group(1).strip()}
+                    )
+                else:
+                    self.reasoning_trace.append(
+                        {"user_message": message, "reasoning": raw_response.strip()}
+                    )
 
         # Parse response
         if truncate_history:
@@ -300,3 +318,192 @@ class ModelWrapper:
         )
 
         return raw_response
+
+    # --------------------------- Batch API helpers --------------------------- #
+    def batch_create_requests(self, request_specs, jsonl_path: str):
+        """Create a JSONL file for OpenAI Batch API.
+
+        Args:
+            request_specs: iterable of dicts with keys:
+               custom_id (str) unique
+               messages (list) OpenAI chat messages
+               max_completion_tokens (int) optional
+               temperature (float) optional
+               extra_body (dict) optional
+            jsonl_path: destination path for requests file
+
+        Note: Only supported for model_source == 'openai'.
+        """
+        if self.model_source != "openai":
+            raise ValueError("Batch API currently only supported for OpenAI source")
+        with open(jsonl_path, "w", encoding="utf-8") as f:
+            for spec in request_specs:
+                body = {
+                    "model": self.model_name,
+                    "messages": spec["messages"],
+                    "max_completion_tokens": spec.get(
+                        "max_completion_tokens", self.max_new_tokens
+                    ),
+                }
+                # Merge any additional provided body keys (e.g., reasoning)
+                extra = spec.get("extra_body") or {}
+                if extra:
+                    body.update(extra)
+                line = {
+                    "custom_id": spec["custom_id"],
+                    "method": "POST",
+                    "url": "/v1/chat/completions",
+                    "body": body,
+                }
+                f.write(json.dumps(line) + "\n")
+
+    def batch_submit(
+        self,
+        jsonl_path: str,
+        completion_window: str = "24h",
+        metadata: dict | None = None,
+    ):
+        """Submit a previously created JSONL requests file to OpenAI Batch API.
+
+        Returns: batch id (str)
+        """
+        if self.model_source != "openai":
+            raise ValueError("Batch API currently only supported for OpenAI source")
+        with open(jsonl_path, "rb") as f:
+            upload = self.client.files.create(file=f, purpose="batch")  # type: ignore
+        batch = self.client.batches.create(  # type: ignore
+            input_file_id=upload.id,
+            endpoint="/v1/chat/completions",
+            completion_window=completion_window,
+            metadata=metadata or {},
+        )
+        return batch.id
+
+    def batch_status(self, batch_id: str):
+        if self.model_source != "openai":
+            raise ValueError("Batch API currently only supported for OpenAI source")
+        return self.client.batches.retrieve(batch_id)  # type: ignore
+
+    def batch_collect(self, batch_id: str, output_jsonl_path: str | None = None):
+        """Attempt to collect batch responses.
+
+        If the batch is not yet completed, returns a status summary dict instead
+        of waiting. This avoids blocking when the user just wants progress.
+
+        Returns:
+            list[dict]    -> when completed (parsed JSONL lines)
+            dict          -> when not completed or failed, keys include:
+                              status, processed, pending, total, failed, message
+        """
+        if self.model_source != "openai":
+            raise ValueError("Batch API currently only supported for OpenAI source")
+
+        batch = self.client.batches.retrieve(batch_id)  # type: ignore
+        print(batch)
+        status = getattr(batch, "status", None)
+        # Attempt to read request counts (structure may vary)
+        counts = getattr(batch, "request_counts", {}) or {}
+
+        def _c(obj, *names):
+            for n in names:
+                if isinstance(obj, dict) and n in obj:
+                    return obj[n] or 0
+                if hasattr(obj, n):
+                    try:
+                        val = getattr(obj, n)
+                        if val is not None:
+                            return val
+                    except Exception:
+                        pass
+            return 0
+
+        total = _c(counts, "total", "requested")
+        completed = _c(counts, "completed", "succeeded")
+        failed = _c(counts, "failed")
+        processed = completed + failed
+        pending = max(total - processed, 0) if total else None
+
+        if status != "completed":
+            return {
+                "status": status,
+                "processed": processed,
+                "failed": failed,
+                "pending": pending,
+                "total": total,
+                "message": f"Batch {batch_id} not ready (status={status}). Processed={processed} Failed={failed} Pending={pending} Total={total}",
+            }
+
+        # Completed: extract output file id (support legacy / future variants)
+        output_file_id = getattr(batch, "output_file_id", None) or getattr(
+            batch, "output_file_ids", None
+        )
+        if isinstance(output_file_id, list):
+            output_file_id = output_file_id[0] if output_file_id else None
+        # If no output file, check for error file and surface its contents
+        if not output_file_id:
+            error_file_id = getattr(batch, "error_file_id", None) or getattr(
+                batch, "error_file_ids", None
+            )
+            if isinstance(error_file_id, list):
+                error_file_id = error_file_id[0] if error_file_id else None
+            if error_file_id:
+                try:
+                    err_content = self.client.files.content(error_file_id)  # type: ignore
+                    err_bytes = err_content.read()
+                    err_text = err_bytes.decode("utf-8", errors="replace")
+                    # Optionally write errors to a sidecar file if an output path was provided
+                    if output_jsonl_path:
+                        err_path = output_jsonl_path + ".errors"
+                        with open(err_path, "w", encoding="utf-8") as ef:
+                            ef.write(err_text)
+                    parsed_errors = []
+                    for line in err_text.splitlines():
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            parsed_errors.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            parsed_errors.append({"unparsed": line})
+                    return {
+                        "status": status,
+                        "processed": processed,
+                        "failed": failed,
+                        "pending": pending,
+                        "total": total,
+                        "errors": parsed_errors,
+                        "message": f"Batch {batch_id} completed with errors only (no output file). Parsed {len(parsed_errors)} error lines.",
+                    }
+                except Exception as e:
+                    return {
+                        "status": status,
+                        "processed": processed,
+                        "failed": failed,
+                        "pending": pending,
+                        "total": total,
+                        "message": f"Batch {batch_id} completed but error file retrieval failed: {e}",
+                    }
+            return {
+                "status": status,
+                "processed": processed,
+                "failed": failed,
+                "pending": pending,
+                "total": total,
+                "message": f"Batch {batch_id} completed but no output or error file id present yet.",
+            }
+        file_content = self.client.files.content(output_file_id)  # type: ignore
+        raw_bytes = file_content.read()
+        text = raw_bytes.decode("utf-8")
+        if output_jsonl_path:
+            with open(output_jsonl_path, "w", encoding="utf-8") as f:
+                f.write(text)
+        parsed = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return parsed
