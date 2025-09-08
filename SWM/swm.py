@@ -139,6 +139,7 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                         try:
                             chosen_box = swm_gen.get_box_id(chosen_coord)
                         except ValueError:
+
                             response = model.send_message(
                                 f"No box in grid coordinate (x, y).\n"
                                 + msg
@@ -147,6 +148,7 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                                 truncate_history=True,
                                 cot=cot,
                             )
+
                             nobox_guess += 1
                             continue
                     else:
