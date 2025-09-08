@@ -55,10 +55,10 @@ def draw_five_cards(given_card_attributes):
     
     # Define the first 4 cards attributes
     predefined_cards = [
-        {'shape': 'circle', 'color': 'red', 'count': 1},
-        {'shape': 'triangle', 'color': 'green', 'count': 2},
-        {'shape': 'star', 'color': 'blue', 'count': 3},
-        {'shape': 'square', 'color': 'yellow', 'count': 4}  # Changed from 'cross' to 'square'
+        {'shape': 'circle', 'color': 'red', 'count': 1, 'background': 'red'},
+        {'shape': 'triangle', 'color': 'green', 'count': 2, 'background': 'green'},
+        {'shape': 'star', 'color': 'blue', 'count': 3, 'background': 'blue'},
+        {'shape': 'square', 'color': 'yellow', 'count': 4, 'background': 'yellow'}
     ]
     
     # Create white board (larger canvas for 5 cards)
@@ -132,7 +132,7 @@ def create_card(frame, attributes, shape_map, color_map, positions):
     
     Args:
         frame: PIL Image of the card frame
-        attributes: dict with 'shape', 'color', 'count'
+        attributes: dict with 'shape', 'color', 'count', 'background'
         shape_map: mapping of shape names to PIL Images
         color_map: mapping of color names to RGB tuples
         positions: dict mapping count to list of (x, y) positions
@@ -140,6 +140,7 @@ def create_card(frame, attributes, shape_map, color_map, positions):
     shape_name = attributes['shape']
     color_name = attributes['color']
     count = attributes['count']
+    background_color = attributes.get('background', 'white')
     
     # Get the shape image and color
     shape_img = shape_map[shape_name]
@@ -150,8 +151,25 @@ def create_card(frame, attributes, shape_map, color_map, positions):
     colored_shape = ImageOps.colorize(black, color, color)
     colored_shape.putalpha(transparent)
     
-    # Create the card
+    # Create the card with background color
     card = frame.copy()
+    
+    # Apply background color if not white
+    if background_color != 'white':
+        # Define background color map - lighter versions of shape colors
+        bg_color_map = {
+            'red': (255, 182, 182),      # Light red
+            'green': (182, 255, 182),    # Light green  
+            'blue': (182, 182, 255),     # Light blue
+            'yellow': (255, 255, 182),   # Light yellow
+            'white': (255, 255, 255)
+        }
+        
+        bg_color = bg_color_map.get(background_color, (255, 255, 255))
+        
+        # Create a background overlay
+        bg_overlay = Image.new('RGBA', card.size, bg_color + (200,))  # Semi-transparent
+        card = Image.alpha_composite(card, bg_overlay)
     
     # Place shapes at specified positions
     for pos in positions[count]:
