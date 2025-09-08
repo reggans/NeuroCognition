@@ -94,7 +94,7 @@ Arguments:
 Outputs:
 
 - Prints average score; temporary chat history in `data/temp_history.json`.
-- Image mode uses `./images` for generated grids.
+- Image mode uses `SWM/images` for generated grids.
 
 ---
 
@@ -170,7 +170,6 @@ Helper script: `./rapm_batch.sh submit|collect` shows multi-model batch runs.
 
 - `main.py` — orchestrates WCST/SWM/RAPM
 - `WCST/` — WCST implementation
-- `swm.py`, `image.py` — SWM (text/image)
+- `SWM/swm.py`, `SWM/image.py` — SWM (text/image)
 - `RAPM/rapm_evaluation.py`, `RAPM/rapm_utils.py` — RAPM logic
 - `shared/model_wrapper.py` — OpenAI/OpenRouter/vLLM wrapper + Batch helpers
-- `rapm_batch.sh`, `rapm_test.sh` — example scripts

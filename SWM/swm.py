@@ -17,10 +17,11 @@ except ImportError:
     from shared.model_wrapper import ModelWrapper
 from .image import SWMImage
 
+
 def image_swm(model, n_boxes, n_tokens=1, cot=None, think_budget=64, note_assist=False):
-    if n_tokens > 1 or note_assist: 
+    if n_tokens > 1 or note_assist:
         raise NotImplementedError
-    
+
     # Initiate w/ task prompt
     task_prompt = f"""You will be performing the Spatial Working Memory task. 
 You will be given an image containing 8 yellow boxes in a grid. 
@@ -44,9 +45,9 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
     tokens = [string.ascii_uppercase[x] for x in range(n_tokens)]
     legal_boxes = dict.fromkeys(tokens)
     for token in tokens:
-        legal_boxes[token] = [x for x in range(1, n_boxes+1)]
+        legal_boxes[token] = [x for x in range(1, n_boxes + 1)]
 
-    worst_case_n = n_boxes ** 2
+    worst_case_n = n_boxes**2
     total_guess = 0
     illegal_guess = 0
     invalid_guess = 0
@@ -66,7 +67,7 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                 # tqdm.write(f"Token {token} put in box {token_box[token]}")
             found_tokens = []
 
-            while (True):
+            while True:
                 for token in found_tokens:
                     if len(legal_boxes[token]) == 0:
                         continue
@@ -76,13 +77,13 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                 # Save to temp file
                 with open("data/temp_history.json", "w") as f:
                     json.dump(model.history, f, indent=4)
-                
+
                 # End test
                 if all([len(legal) == 0 for legal in legal_boxes.values()]):
                     break
                 if total_guess >= worst_case_n:
                     break
-                
+
                 opened_boxes = set()
                 found_tokens = []
                 found = False
@@ -92,16 +93,16 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
 
                     with open("data/temp_history.json", "w") as f:
                         json.dump(model.history, f, indent=4)
-                    
+
                     if total_guess >= worst_case_n:
                         break
-                    
+
                     # Note-taking assistance
                     notes = ""
                     if note_assist:
                         for token, legal in legal_boxes.items():
                             notes += f"Boxes that has contained token {token}: "
-                            for box in range(1, n_boxes+1):
+                            for box in range(1, n_boxes + 1):
                                 if box not in legal:
                                     notes += f"{box}, "
                             notes += "\n"
@@ -109,34 +110,61 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                         for box in opened_boxes:
                             notes += f"{box}, "
                         notes += "\n"
-                    
+
                     msg = ""
                     for token in tokens:
                         msg += f"{token} tokens found: {n_boxes - len(legal_boxes[token])}\n"
 
                     # Get and validate response
                     if re.search(r"<answer>(?s:.*)</answer>", response) is not None:
-                        chosen_coord = re.search(r"<answer>(?s:.*)</answer>", response)[0]
-                        chosen_coord = re.sub(r"<answer>|</answer>", "", chosen_coord).strip()
+                        chosen_coord = re.search(r"<answer>(?s:.*)</answer>", response)[
+                            0
+                        ]
+                        chosen_coord = re.sub(
+                            r"<answer>|</answer>", "", chosen_coord
+                        ).strip()
                         try:
                             chosen_coord = re.findall(r"[0-9]+", chosen_coord)
-                            chosen_coord = (int(chosen_coord[0]), int(chosen_coord[1])) 
+                            chosen_coord = (int(chosen_coord[0]), int(chosen_coord[1]))
                         except IndexError:
-                            response = model.send_message(f"Please answer with a valid grid coordinate (x, y).\n" + msg + notes + question, truncate_history=True, cot=cot)
+                            response = model.send_message(
+                                f"Please answer with a valid grid coordinate (x, y).\n"
+                                + msg
+                                + notes
+                                + question,
+                                truncate_history=True,
+                                cot=cot,
+                            )
                             invalid_guess += 1
                         try:
                             chosen_box = swm_gen.get_box_id(chosen_coord)
                         except ValueError:
-                            response = model.send_message(f"No box in grid coordinate {chosen_coord}.\n" + msg + notes + question, truncate_history=True, cot=cot)
+
+                            response = model.send_message(
+                                f"No box in grid coordinate (x, y).\n"
+                                + msg
+                                + notes
+                                + question,
+                                truncate_history=True,
+                                cot=cot,
+                            )
+
                             nobox_guess += 1
                             continue
                     else:
-                        response = model.send_message(f"Please answer with the specified format\n" + msg + notes + question, truncate_history=True, cot=cot)
+                        response = model.send_message(
+                            f"Please answer with the specified format\n"
+                            + msg
+                            + notes
+                            + question,
+                            truncate_history=True,
+                            cot=cot,
+                        )
                         invalid_guess += 1
                         continue
-                        
+
                     swm_gen.open_box(chosen_coord, token_box[tokens[0]])
-                    
+
                     legal = False
                     for legal in legal_boxes.values():
                         if chosen_box in legal:
@@ -156,7 +184,7 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                             token_bar.update(1)
                             legal_boxes[token].remove(chosen_box)
                             found_tokens.append(token)
-                    
+
                     msg = ""
                     if found:
                         for token in found_tokens:
@@ -164,8 +192,10 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                     else:
                         msg += f"No tokens found in box {chosen_coord}.\n" + msg
 
-                    response = model.send_message(msg + notes + question, truncate_history=True, cot=cot)
-                    model.history[-2]["content"] = msg      # Truncate user response length
+                    response = model.send_message(
+                        msg + notes + question, truncate_history=True, cot=cot
+                    )
+                    model.history[-2]["content"] = msg  # Truncate user response length
 
     run_stats = {
         "worst_case_guesses": worst_case_n,
@@ -177,6 +207,7 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
     }
 
     return run_stats
+
 
 def text_swm(model, n_boxes, n_tokens=1, cot=None, think_budget=64, note_assist=False):
     """
@@ -213,13 +244,14 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
     tokens = [string.ascii_uppercase[x] for x in range(n_tokens)]
     legal_boxes = dict.fromkeys(tokens)
     for token in tokens:
-        legal_boxes[token] = [x for x in range(1, n_boxes+1)]
+        legal_boxes[token] = [x for x in range(1, n_boxes + 1)]
 
-    worst_case_n = n_boxes ** 2
+    worst_case_n = n_boxes**2
     total_guess = 0
     illegal_guess = 0
     invalid_guess = 0
     repeated_guess = 0
+    nobox_guess = 0
 
     # Start the test
     response = model.send_message(question, cot=cot)
@@ -231,7 +263,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                 # tqdm.write(f"Token {token} put in box {token_box[token]}")
             found_tokens = []
 
-            while (True):
+            while True:
                 for token in found_tokens:
                     if len(legal_boxes[token]) == 0:
                         continue
@@ -241,13 +273,13 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                 # Save to temp file
                 with open("data/temp_history.json", "w") as f:
                     json.dump(model.history, f, indent=4)
-                
+
                 # End test
                 if all([len(legal) == 0 for legal in legal_boxes.values()]):
                     break
                 if total_guess >= worst_case_n:
                     break
-                
+
                 opened_boxes = set()
                 found_tokens = []
                 found = False
@@ -257,16 +289,16 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
 
                     with open("data/temp_history.json", "w") as f:
                         json.dump(model.history, f, indent=4)
-                    
+
                     if total_guess >= worst_case_n:
                         break
-                    
+
                     # Note-taking assistance
+                    notes = ""
                     if note_assist:
-                        notes = ""
                         for token, legal in legal_boxes.items():
                             notes += f"Boxes that has contained token {token}: "
-                            for box in range(1, n_boxes+1):
+                            for box in range(1, n_boxes + 1):
                                 if box not in legal:
                                     notes += f"{box}, "
                             notes += "\n"
@@ -274,7 +306,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         for box in opened_boxes:
                             notes += f"{box}, "
                         notes += "\n"
-                    
+
                     msg = ""
                     for token in tokens:
                         msg += f"{token} tokens found: {n_boxes - len(legal_boxes[token])}\n"
@@ -282,18 +314,34 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     # Get and validate response
                     if re.search(r"<answer>(?s:.*)</answer>", response) is not None:
                         chosen_box = re.search(r"<answer>(?s:.*)</answer>", response)[0]
-                        chosen_box = re.sub(r"<answer>|</answer>", "", chosen_box).strip()
+                        chosen_box = re.sub(
+                            r"<answer>|</answer>", "", chosen_box
+                        ).strip()
                         try:
                             chosen_box = int(chosen_box)
                         except ValueError:
-                            response = model.send_message(f"Please answer with a box number (1-{n_boxes}).\n" + msg + notes + question, truncate_history=True, cot=cot)
+                            response = model.send_message(
+                                f"Please answer with a box number (1-{n_boxes}).\n"
+                                + msg
+                                + notes
+                                + question,
+                                truncate_history=True,
+                                cot=cot,
+                            )
                             invalid_guess += 1
                             continue
                     else:
-                        response = model.send_message(f"Please answer with the specified format\n" + msg + notes + question, truncate_history=True, cot=cot)
+                        response = model.send_message(
+                            f"Please answer with the specified format\n"
+                            + msg
+                            + notes
+                            + question,
+                            truncate_history=True,
+                            cot=cot,
+                        )
                         invalid_guess += 1
                         continue
-                    
+
                     legal = False
                     for legal in legal_boxes.values():
                         if chosen_box in legal:
@@ -313,7 +361,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                             token_bar.update(1)
                             legal_boxes[token].remove(chosen_box)
                             found_tokens.append(token)
-                    
+
                     msg = ""
                     if found:
                         for token in found_tokens:
@@ -321,8 +369,10 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     else:
                         msg += f"No tokens found in box {chosen_box}.\n" + msg
 
-                    response = model.send_message(msg + notes + question, truncate_history=True, cot=cot)
-                    model.history[-2]["content"] = msg      # Truncate user response length
+                    response = model.send_message(
+                        msg + notes + question, truncate_history=True, cot=cot
+                    )
+                    model.history[-2]["content"] = msg  # Truncate user response length
 
     run_stats = {
         "worst_case_guesses": worst_case_n,
@@ -330,9 +380,11 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
         "guesses": total_guess,
         "invalid": invalid_guess,
         "repeated": repeated_guess,
+        "nobox": nobox_guess,
     }
 
     return run_stats
+
 
 def score(run_stats):
     """
@@ -342,4 +394,6 @@ def score(run_stats):
     Returns:
         float: The score.
     """
-    return 1 - (run_stats['illegal'] + run_stats['repeated'] + run_stats['nobox']) / (run_stats['guesses'] - run_stats['invalid'])
+    return 1 - (run_stats["illegal"] + run_stats["repeated"] + run_stats["nobox"]) / (
+        run_stats["guesses"] - run_stats["invalid"]
+    )

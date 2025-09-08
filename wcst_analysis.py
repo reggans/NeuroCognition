@@ -98,7 +98,7 @@ def get_setup_type(filename):
 
 
 def analyze_results():
-    data_dir = Path("./wcst_data/text")
+    data_dir = Path("./WCST/data/text")
     if not data_dir.exists():
         raise FileNotFoundError("WCST data directory not found")
 
@@ -328,15 +328,15 @@ def analyze_results():
 
         plt.tight_layout()
 
-        plots_dir = Path("./wcst_data/plots")
+        plots_dir = Path("./WCST/data/plots")
         plots_dir.mkdir(exist_ok=True)
         plt.savefig(
-            f"wcst_data/plots/wcst_analysis_{setup_type}.png", bbox_inches="tight"
+            f"WCST/data/plots/wcst_analysis_{setup_type}.png", bbox_inches="tight"
         )
         plt.close()
 
     # Save summary statistics
-    with open("wcst_data/wcst_summary.json", "w") as f:
+    with open("WCST/data/wcst_summary.json", "w") as f:
         json.dump(results, f, indent=4)
 
     return results
