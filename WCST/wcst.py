@@ -22,6 +22,7 @@ The cards will be described by the following attributes:
 1. Number of symbols
 2. Color of symbols
 3. Shape of symbols
+4. Background color of the card
 
 You will be told "Correct!" if you are correct and "Incorrect. Please try again." if you are incorrect.
 If you are incorrect, you either made a mistake or the rule has changed. 
@@ -38,6 +39,7 @@ The cards will be described by the following attributes in a random order:
 1. Number of symbols
 2. Color of symbols
 3. Shape of symbols
+4. Background color of the card
 
 You will be told "Correct!" if you are correct and "Incorrect. Please try again." if you are incorrect.
 If you are incorrect, you either made a mistake or the rule has changed. 
@@ -83,6 +85,7 @@ The cards will have the following attributes:
 1. Number of symbols
 2. Color of symbols
 3. Shape of symbols
+4. Background color of the card
 
 You will be told "Correct!" if you are correct and "Incorrect. Please try again." if you are incorrect.
 If you are incorrect, you either made a mistake or the rule has changed.
@@ -153,10 +156,10 @@ def run_wcst(model="llama", variant="card", max_trials=64, num_correct=5, repeat
 
     if variant == "card":
         system_prompt = wcst_prompt
-        rules = ["color", "shape", "number"]
+        rules = ["color", "shape", "number", "background"]
     elif variant == "card-random":
         system_prompt = wcst_random_prompt
-        rules = ["color", "shape", "number"]
+        rules = ["color", "shape", "number", "background"]
     elif variant == "string":
         system_prompt = random_prompt
         rules = ["length", "vowels", "consonants"]
@@ -359,7 +362,7 @@ def run_wcst_image(model="llama", max_trials=64, num_correct=5, repeats=1,
         system_prompt += "Answer only with your final answer.\n"
     system_prompt += """State your final answer using the template: "<answer>your answer</answer>"\n"""
 
-    rules = ["color", "shape", "number"]
+    rules = ["color", "shape", "number", "background"]
     
     save = {}
     run_history = {}
@@ -526,23 +529,24 @@ def find_matching_card(given_attrs, rule):
     
     Args:
         given_attrs: dict with given card attributes
-        rule: str, the matching rule ('color', 'shape', 'number')
+        rule: str, the matching rule ('color', 'shape', 'number', 'background')
     
     Returns:
         int: The card number (1-4) that matches the rule
     """
     # Define the 4 reference cards (same as in image.py)
     reference_cards = [
-        {'shape': 'circle', 'color': 'red', 'count': 1},      # Card 1
-        {'shape': 'triangle', 'color': 'green', 'count': 2},  # Card 2
-        {'shape': 'star', 'color': 'blue', 'count': 3},       # Card 3
-        {'shape': 'square', 'color': 'yellow', 'count': 4}    # Card 4
+        {'shape': 'circle', 'color': 'red', 'count': 1, 'background': 'red'},      # Card 1
+        {'shape': 'triangle', 'color': 'green', 'count': 2, 'background': 'green'},  # Card 2
+        {'shape': 'star', 'color': 'blue', 'count': 3, 'background': 'blue'},       # Card 3
+        {'shape': 'square', 'color': 'yellow', 'count': 4, 'background': 'yellow'}    # Card 4
     ]
     
     rule_map = {
         'color': 'color',
         'shape': 'shape', 
-        'number': 'count'
+        'number': 'count',
+        'background': 'background'
     }
     
     attribute = rule_map[rule]

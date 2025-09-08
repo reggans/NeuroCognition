@@ -1,15 +1,15 @@
 import random, string
 
 def wcst_generator(rule, randomize=False):
-    rules = ["number", "color", "shape"]
+    rules = ["number", "color", "shape", "background"]
 
     if rule not in rules:
         raise Exception("Rule not recognized")
     
-    options = [{"number": "one", "color": "red", "shape": "circle"},
-               {"number": "two", "color": "green", "shape": "triangle"},
-               {"number": "three", "color": "blue", "shape": "star"},
-               {"number": "four", "color": "yellow", "shape": "square"},
+    options = [{"number": "one", "color": "red", "shape": "circle", "background": "red"},
+               {"number": "two", "color": "green", "shape": "triangle", "background": "green"},
+               {"number": "three", "color": "blue", "shape": "star", "background": "blue"},
+               {"number": "four", "color": "yellow", "shape": "square", "background": "yellow"},
                ]
     
     ans = random.choice(options)
@@ -156,7 +156,7 @@ def count_vowels(str):
 def generate_few_shot(variant):
     prompt = "Example of a short session:\n"
     if variant == "card":
-        rules = ["number", "color", "shape"]
+        rules = ["number", "color", "shape", "background"]
 
         for rule in rules:
             if rules.index(rule) != 0:
@@ -187,7 +187,7 @@ def generate_few_shot(variant):
                 prompt += f"ANSWER: {true_ans}\n\n"
 
     elif variant == "card-random":
-        rules = ["number", "color", "shape"]
+        rules = ["number", "color", "shape", "background"]
 
         for rule in rules:
             if rules.index(rule) != 0:
