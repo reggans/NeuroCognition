@@ -18,7 +18,7 @@ except ImportError:
 from .image import SWMImage
 
 
-def image_swm(model, n_boxes, n_tokens=1, cot=None, think_budget=64, note_assist=False):
+def image_swm(model, n_boxes, n_tokens=1, cot=None, think_budget=64, note_assist=False, image_only=False):
     if n_tokens > 1 or note_assist:
         raise NotImplementedError
 
@@ -32,7 +32,7 @@ The token will be generated in a box that has never contained the token before i
 The token may be generated in a box that has been opened and found empty before, as long as it never contained that type of token previously. 
 Your final answer should be a coordinate (x, y), the grid coordinate of the box you choose.
 """
-    model.init_chat(task_prompt)
+    model.init_chat(task_prompt, image_only=image_only)
 
     # Configure the question presented each turn and CoT prompt
     if cot is not None:
@@ -53,6 +53,8 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
     invalid_guess = 0
     repeated_guess = 0
     nobox_guess = 0
+
+    run_history = []
 
     os.makedirs("SWM/images", exist_ok=True)
     swm_gen = SWMImage("SWM/images", n_boxes)
@@ -127,6 +129,16 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                             chosen_coord = re.findall(r"[0-9]+", chosen_coord)
                             chosen_coord = (int(chosen_coord[0]), int(chosen_coord[1]))
                         except IndexError:
+                            run_history.append(
+                                {
+                                    "token_box": [swm_gen.get_box_coord(token_box[t]) for t in tokens],
+                                    "chosen_coord": None,
+                                    "found": False,
+                                    "status": "invalid",
+                                    "raw_response": response,
+                                }
+                            )
+
                             response = model.send_message(
                                 f"Please answer with a valid grid coordinate (x, y).\n"
                                 + msg
@@ -136,9 +148,19 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                                 cot=cot,
                             )
                             invalid_guess += 1
+                            continue
                         try:
                             chosen_box = swm_gen.get_box_id(chosen_coord)
                         except ValueError:
+                            run_history.append(
+                                {
+                                    "token_box": [swm_gen.get_box_coord(token_box[t]) for t in tokens],
+                                    "chosen_coord": chosen_coord,
+                                    "found": False,
+                                    "status": "nobox",
+                                    "raw_response": response,
+                                }
+                            )
 
                             response = model.send_message(
                                 f"No box in grid coordinate (x, y).\n"
@@ -152,6 +174,16 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                             nobox_guess += 1
                             continue
                     else:
+                        run_history.append(
+                            {
+                                "token_box": [swm_gen.get_box_coord(token_box[t]) for t in tokens],
+                                "chosen_coord": None,
+                                "found": False,
+                                "status": "invalid",
+                                "raw_response": response,
+                            }
+                        )
+
                         response = model.send_message(
                             f"Please answer with the specified format\n"
                             + msg
@@ -191,11 +223,23 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                             msg = f"Token {token} found in box {chosen_coord}.\n" + msg
                     else:
                         msg += f"No tokens found in box {chosen_coord}.\n" + msg
+                    
+                    run_history.append(
+                        {
+                            "token_box": [swm_gen.get_box_coord(token_box[t]) for t in tokens],
+                            "chosen_coord": chosen_coord,
+                            "found": found,
+                            "status": "box",
+                            "raw_response": response,
+                        }
+                    )
 
                     response = model.send_message(
                         msg + notes + question, truncate_history=True, cot=cot
                     )
-                    model.history[-2]["content"][0]["text"] = msg  # Truncate user response length
+
+                    if not image_only:
+                        model.history[-2]["content"][0]["text"] = msg  # Truncate user response length
 
     run_stats = {
         "worst_case_guesses": worst_case_n,
@@ -206,7 +250,7 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
         "nobox": nobox_guess,
     }
 
-    return run_stats
+    return run_stats, run_history
 
 
 def text_swm(model, n_boxes, n_tokens=1, cot=None, think_budget=64, note_assist=False):
@@ -252,6 +296,8 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
     invalid_guess = 0
     repeated_guess = 0
     nobox_guess = 0
+
+    run_history = []
 
     # Start the test
     response = model.send_message(question, cot=cot)
@@ -320,6 +366,16 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         try:
                             chosen_box = int(chosen_box)
                         except ValueError:
+                            run_history.append(
+                                {
+                                    "token_box": [token_box[t] for t in tokens],
+                                    "chosen_box": None,
+                                    "found": False,
+                                    "status": "invalid",
+                                    "raw_response": response,
+                                }
+                            )
+
                             response = model.send_message(
                                 f"Please answer with a box number (1-{n_boxes}).\n"
                                 + msg
@@ -331,6 +387,16 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                             invalid_guess += 1
                             continue
                     else:
+                        run_history.append(
+                            {
+                                "token_box": [token_box[t] for t in tokens],
+                                "chosen_box": None,
+                                "found": False,
+                                "status": "invalid",
+                                "raw_response": response,
+                            }
+                        )
+
                         response = model.send_message(
                             f"Please answer with the specified format\n"
                             + msg
@@ -368,6 +434,16 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                             msg = f"Token {token} found in box {chosen_box}.\n" + msg
                     else:
                         msg += f"No tokens found in box {chosen_box}.\n" + msg
+                    
+                    run_history.append(
+                        {
+                            "token_box": [token_box[t] for t in tokens],
+                            "chosen_box": chosen_box,
+                            "found": found,
+                            "status": "valid",
+                            "raw_response": response,
+                        }
+                    )
 
                     response = model.send_message(
                         msg + notes + question, truncate_history=True, cot=cot
@@ -383,7 +459,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
         "nobox": nobox_guess,
     }
 
-    return run_stats
+    return run_stats, run_history
 
 
 def score(run_stats):

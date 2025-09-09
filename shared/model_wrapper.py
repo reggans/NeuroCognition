@@ -125,6 +125,7 @@ class ModelWrapper:
         self.think_budget = think_budget
         self.image_input = image_input
         self.image_path = image_path
+        self.image_only = False  # Image-only mode
         self.reasoning_trace = []  # Add new private attribute
 
         if model_source in ["openai", "openrouter", "vllm"]:
@@ -157,11 +158,12 @@ class ModelWrapper:
                 "Unsupported model source. Supported sources are: openai, openrouter, vllm."
             )
 
-    def init_chat(self, task_prompt):
+    def init_chat(self, task_prompt, image_only=False):
         self.history = [
             {"role": "system", "content": task_prompt},
         ]
         self.reasoning_trace = []  # Reset reasoning trace when starting new chat
+        self.image_only = image_only
 
     def send_message(
         self, message, max_new_tokens=None, truncate_history=False, cot=False
@@ -178,7 +180,7 @@ class ModelWrapper:
             image_file_path = os.path.join(self.image_path, "current.png")
             base64_image = encode_image_to_base64(image_file_path)
             content = []
-            if message:
+            if message and not self.image_only:
                 content.append({"type": "text", "text": message})
             content.append(
                 {
