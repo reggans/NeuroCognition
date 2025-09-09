@@ -88,7 +88,7 @@ class SWMImage:
         return new_img
     
     def get_box_id(self, box_coord):
-        return self.box_coords.index(box_coord)
+        return self.box_coords.index(box_coord) + 1  # Box IDs are 1-indexed
     
     def get_box_coord(self, box_id):
-        return self.box_coords[box_id]
+        return self.box_coords[box_id - 1]  # Convert to 0-indexed for list access
