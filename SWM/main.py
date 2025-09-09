@@ -17,7 +17,7 @@ except ImportError:
     from shared.model_wrapper import ModelWrapper
 from .swm import image_swm, text_swm, score
 
-def swm_main(model=None, model_source="hf", n_boxes=6, n_tokens=1, cot=False, runs=1, 
+def swm_main(model=None, model_source="hf", n_boxes=6, n_tokens=1, image_only=False, cot=False, runs=1, 
                  max_tokens=512, think_budget=64, notes=False, image=False, api_key=None):
     """
     Run the Spatial Working Memory (SWM) test.
@@ -38,6 +38,8 @@ def swm_main(model=None, model_source="hf", n_boxes=6, n_tokens=1, cot=False, ru
     # Input validation
     if model_source not in ["openai", "openrouter", "vllm"]:
         raise ValueError("Model source must be either 'openai', 'openrouter', or 'vllm'.")
+    if not image and image_only:
+        raise ValueError("Image-only mode requires image mode to be enabled.")
 
     if model is None:
         if model_source == "vllm":
@@ -90,6 +92,7 @@ def swm_main(model=None, model_source="hf", n_boxes=6, n_tokens=1, cot=False, ru
 
     run_stats = {}
     run_history = {}
+    structured_history = {}  # Add new list for structured history
     run_reasoning = {}  # Add new dictionary for reasoning traces
     
     for i in range(runs):
@@ -100,9 +103,9 @@ def swm_main(model=None, model_source="hf", n_boxes=6, n_tokens=1, cot=False, ru
 
         print(f"Run {i+1}/{runs}")
         if image:
-            run_stats[f"run_{i+1}"] = image_swm(model_instance, n_boxes, n_tokens=n_tokens, cot=cot, think_budget=think_budget, note_assist=notes)
+            run_stats[f"run_{i+1}"], structured_history[f"run_{i+1}"] = image_swm(model_instance, n_boxes, n_tokens=n_tokens, cot=cot, think_budget=think_budget, note_assist=notes, image_only=image_only)
         else:
-            run_stats[f"run_{i+1}"] = text_swm(model_instance, n_boxes, n_tokens=n_tokens, cot=cot, think_budget=think_budget, note_assist=notes)
+            run_stats[f"run_{i+1}"], structured_history[f"run_{i+1}"] = text_swm(model_instance, n_boxes, n_tokens=n_tokens, cot=cot, think_budget=think_budget, note_assist=notes)
         run_history[f"run_{i+1}"] = model_instance.history
         run_reasoning[f"run_{i+1}"] = model_instance.reasoning_trace  # Save reasoning trace
 
@@ -111,6 +114,9 @@ def swm_main(model=None, model_source="hf", n_boxes=6, n_tokens=1, cot=False, ru
         
         with open(file_header + "run_history.json", "w") as f:
             json.dump(run_history, f, indent=4)
+        
+        with open(file_header + "run_structured_history.json", "w") as f:  # Save structured history
+            json.dump(structured_history, f, indent=4)
             
         with open(file_header + "run_reasoning.json", "w") as f:  # Save reasoning traces
             json.dump(run_reasoning, f, indent=4)

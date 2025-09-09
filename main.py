@@ -84,6 +84,7 @@ Examples:
     swm_parser.add_argument("--notes", action="store_true")
     swm_parser.add_argument("--image", action="store_true")
     swm_parser.add_argument("--api_key", type=str, default=None)
+    swm_parser.add_argument("--image-only", action="store_true")
 
     # RAPM parser
     rapm_parser = subparsers.add_parser(
@@ -232,6 +233,7 @@ Examples:
             notes=args.notes,
             image=args.image,
             api_key=args.api_key,
+            image_only=args.image_only,
         )
     elif args.test == "rapm":
         # Validate RAPM availability
