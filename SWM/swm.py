@@ -195,7 +195,7 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                     response = model.send_message(
                         msg + notes + question, truncate_history=True, cot=cot
                     )
-                    model.history[-2]["content"] = msg  # Truncate user response length
+                    model.history[-2]["content"][0]["text"] = msg  # Truncate user response length
 
     run_stats = {
         "worst_case_guesses": worst_case_n,
