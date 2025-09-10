@@ -32,7 +32,7 @@ The token will be generated in a box that has never contained the token before i
 The token may be generated in a box that has been opened and found empty before, as long as it never contained that type of token previously. 
 Your final answer should be a coordinate (x, y), the grid coordinate of the box you choose.
 """
-    model.init_chat(task_prompt, image_only=image_only)
+    model.init_chat(task_prompt)
 
     # Configure the question presented each turn and CoT prompt
     if cot is not None:
@@ -235,7 +235,10 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                     )
 
                     response = model.send_message(
-                        msg + notes + question, truncate_history=True, cot=cot
+                        msg + notes + question, 
+                        truncate_history=True, 
+                        cot=cot, 
+                        image_only=image_only
                     )
 
                     if not image_only:
