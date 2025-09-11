@@ -18,7 +18,15 @@ except ImportError:
 from .image import SWMImage
 
 
-def image_swm(model, n_boxes, n_tokens=1, cot=None, think_budget=64, note_assist=False, image_only=False):
+def image_swm(
+    model,
+    n_boxes,
+    n_tokens=1,
+    cot=None,
+    think_budget=64,
+    note_assist=False,
+    image_only=False,
+):
     if n_tokens > 1 or note_assist:
         raise NotImplementedError
 
@@ -131,7 +139,10 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                         except IndexError:
                             run_history.append(
                                 {
-                                    "token_box": [swm_gen.get_box_coord(token_box[t]) for t in tokens],
+                                    "token_box": [
+                                        swm_gen.get_box_coord(token_box[t])
+                                        for t in tokens
+                                    ],
                                     "chosen_coord": None,
                                     "found": False,
                                     "status": "invalid",
@@ -154,7 +165,10 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                         except ValueError:
                             run_history.append(
                                 {
-                                    "token_box": [swm_gen.get_box_coord(token_box[t]) for t in tokens],
+                                    "token_box": [
+                                        swm_gen.get_box_coord(token_box[t])
+                                        for t in tokens
+                                    ],
                                     "chosen_coord": chosen_coord,
                                     "found": False,
                                     "status": "nobox",
@@ -176,7 +190,9 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                     else:
                         run_history.append(
                             {
-                                "token_box": [swm_gen.get_box_coord(token_box[t]) for t in tokens],
+                                "token_box": [
+                                    swm_gen.get_box_coord(token_box[t]) for t in tokens
+                                ],
                                 "chosen_coord": None,
                                 "found": False,
                                 "status": "invalid",
@@ -212,7 +228,6 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                     for token in tokens:
                         if chosen_box == token_box[token]:
                             found = True
-                            token_box[token] = -1
                             token_bar.update(1)
                             legal_boxes[token].remove(chosen_box)
                             found_tokens.append(token)
@@ -223,10 +238,11 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                             msg = f"Token {token} found in box {chosen_coord}.\n" + msg
                     else:
                         msg += f"No tokens found in box {chosen_coord}.\n" + msg
-                    
                     run_history.append(
                         {
-                            "token_box": [swm_gen.get_box_coord(token_box[t]) for t in tokens],
+                            "token_box": [
+                                swm_gen.get_box_coord(token_box[t]) for t in tokens
+                            ],
                             "chosen_coord": chosen_coord,
                             "found": found,
                             "status": "box",
@@ -235,14 +251,16 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                     )
 
                     response = model.send_message(
-                        msg + notes + question, 
-                        truncate_history=True, 
-                        cot=cot, 
-                        image_only=image_only
+                        msg + notes + question,
+                        truncate_history=True,
+                        cot=cot,
+                        image_only=image_only,
                     )
 
                     if not image_only:
-                        model.history[-2]["content"][0]["text"] = msg  # Truncate user response length
+                        model.history[-2]["content"][0][
+                            "text"
+                        ] = msg  # Truncate user response length
 
     run_stats = {
         "worst_case_guesses": worst_case_n,
@@ -426,7 +444,6 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     for token in tokens:
                         if chosen_box == token_box[token]:
                             found = True
-                            token_box[token] = -1
                             token_bar.update(1)
                             legal_boxes[token].remove(chosen_box)
                             found_tokens.append(token)
@@ -437,7 +454,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                             msg = f"Token {token} found in box {chosen_box}.\n" + msg
                     else:
                         msg += f"No tokens found in box {chosen_box}.\n" + msg
-                    
+
                     run_history.append(
                         {
                             "token_box": [token_box[t] for t in tokens],
