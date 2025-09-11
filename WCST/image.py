@@ -1,7 +1,7 @@
 from PIL import Image, ImageOps, ImageDraw, ImageFont
 import os
 
-def draw_five_cards(given_card_attributes):
+def draw_five_cards(given_card_attributes, bg_color=False):
     """
     Draw 5 cards on a white board with specified attributes.
     
@@ -54,12 +54,20 @@ def draw_five_cards(given_card_attributes):
     }
     
     # Define the first 4 cards attributes
-    predefined_cards = [
-        {'shape': 'circle', 'color': 'red', 'count': 1, 'background': 'red'},
-        {'shape': 'triangle', 'color': 'green', 'count': 2, 'background': 'green'},
-        {'shape': 'star', 'color': 'blue', 'count': 3, 'background': 'blue'},
-        {'shape': 'square', 'color': 'yellow', 'count': 4, 'background': 'yellow'}
-    ]
+    if bg_color:
+        predefined_cards = [
+            {'shape': 'circle', 'color': 'red', 'count': 1, 'background': 'red'},
+            {'shape': 'triangle', 'color': 'green', 'count': 2, 'background': 'green'},
+            {'shape': 'star', 'color': 'blue', 'count': 3, 'background': 'blue'},
+            {'shape': 'square', 'color': 'yellow', 'count': 4, 'background': 'yellow'}
+        ]
+    else:
+        predefined_cards = [
+            {'shape': 'circle', 'color': 'red', 'count': 1},
+            {'shape': 'triangle', 'color': 'green', 'count': 2},
+            {'shape': 'star', 'color': 'blue', 'count': 3},
+            {'shape': 'square', 'color': 'yellow', 'count': 4}
+        ]
     
     # Create white board (larger canvas for 5 cards)
     board_width = 800

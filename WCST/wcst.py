@@ -9,7 +9,7 @@ import sys
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from .utils import generate_few_shot, wcst_generator, string_generator
+from .utils import generate_few_shot, wcst_generator, string_generator, check_rule_ambiguity
 try:
     from ..shared.model_wrapper import ModelWrapper
 except ImportError:
@@ -295,8 +295,8 @@ def run_wcst(model="llama", variant="card", max_trials=64, num_correct=5, repeat
         with open(save_path.replace(".json", "_reasoning.json"), "w") as f:  # Save reasoning traces
             json.dump(run_reasoning, f, indent=4)
 
-def run_wcst_image(model="llama", max_trials=64, num_correct=5, repeats=1, 
-                   few_shot=False, cot=False, hint=False, model_source="hf", max_tokens=512, 
+def run_wcst_image(model="llama", max_trials=64, num_correct=5, repeats=1, bg_color=False,
+                   force_ambig_first=False, few_shot=False, cot=False, hint=False, model_source="hf", max_tokens=512, 
                    think_budget=64, api_key=None, verbose=15):
     """
     Run the Wisconsin Card Sorting Test (WCST) with visual card images.
@@ -321,7 +321,7 @@ def run_wcst_image(model="llama", max_trials=64, num_correct=5, repeats=1,
     os.makedirs(os.path.join("WCST", "data", "image"), exist_ok=True)
     os.makedirs(os.path.join("WCST", "images"), exist_ok=True)
 
-    save_path = os.path.join("WCST", "data", "image", f"{model_source}_{model.replace('/', '-')}_image_{max_trials}-{num_correct}.json")
+    save_path = os.path.join("WCST", "data", "image", f"{model_source}_{model.replace('/', '-')}_image_{max_trials}-{num_correct}{'-bg' if bg_color else ''}.json")
 
     if few_shot and cot:
         save_path = save_path.replace(".json", "_few_shot_cot.json")
@@ -352,6 +352,8 @@ def run_wcst_image(model="llama", max_trials=64, num_correct=5, repeats=1,
         return
     
     system_prompt = image_prompt
+    if not bg_color:
+        system_prompt = system_prompt.replace("4. Background color of the card", "")
 
     if few_shot:
         system_prompt += generate_few_shot("card")
@@ -362,7 +364,9 @@ def run_wcst_image(model="llama", max_trials=64, num_correct=5, repeats=1,
         system_prompt += "Answer only with your final answer.\n"
     system_prompt += """State your final answer using the template: "<answer>your answer</answer>"\n"""
 
-    rules = ["color", "shape", "number", "background"]
+    rules = ["color", "shape", "number"]
+    if bg_color:
+        rules.append("background")
     
     save = {}
     run_history = {}
@@ -382,11 +386,13 @@ def run_wcst_image(model="llama", max_trials=64, num_correct=5, repeats=1,
         completed_cat = 0
         total_correct = 0
         correct_prefix = ""
+        force_ambig = False
 
         with tqdm(total=max_trials, desc="Total trials") as trial_bar:
-            for _ in range(2):      
+            for _ in range(2):     # Twice per rule
                 for rule in rules:
                     correct_cnt = 0
+                    force_ambig = True if force_ambig_first else False
                     
                     with tqdm(total=num_correct, desc=f"Correct answers for {rule}") as correct_bar:
                         while correct_cnt < num_correct:
@@ -394,13 +400,14 @@ def run_wcst_image(model="llama", max_trials=64, num_correct=5, repeats=1,
                                 break
                             
                             # Generate card attributes for the given card
-                            given_attrs, option_cards = wcst_generator(rule, False)
+                            given_attrs, option_cards = wcst_generator(rule, False, bg_color=bg_color, ambiguous=force_ambig)
+                            force_ambig = False
                             
                             # Convert text representation to image attributes
-                            given_card_attrs = parse_card_attributes(given_attrs)
+                            given_card_attrs = parse_card_attributes(given_attrs, bg_color=bg_color)
                             
                             # Generate the 5-card image
-                            draw_five_cards(given_card_attrs)
+                            draw_five_cards(given_card_attrs, bg_color=bg_color)
                             
                             # Find the correct answer (which of cards 1-4 matches the rule)
                             correct_card_idx = find_matching_card(given_card_attrs, rule)
@@ -453,6 +460,7 @@ def run_wcst_image(model="llama", max_trials=64, num_correct=5, repeats=1,
                                             "correct_prefix": correct_prefix,
                                             "given_card": given_card_attrs,
                                             "correct_card": correct_card_idx,
+                                            "ambiguous": check_rule_ambiguity(given_attrs, option_cards[correct_card_idx-1], bg_color=bg_color),
                                             "response": response,
                                             "model_ans": ans,
                                             "true_ans": correct_card_idx}
@@ -478,15 +486,16 @@ def run_wcst_image(model="llama", max_trials=64, num_correct=5, repeats=1,
         with open(save_path.replace(".json", "_reasoning.json"), "w") as f:
             json.dump(run_reasoning, f, indent=4)
 
-def parse_card_attributes(card_description):
+def parse_card_attributes(card_description, bg_color=False):
     """
     Parse a card description string into attributes dict for image generation.
     
     Args:
-        card_description: String like "2 green triangles" or "four green triangles"
+        card_description: String like "2 green triangles" or "four green triangles red" (with bg color)
+        bg_color: Whether to expect background color in the description
     
     Returns:
-        dict: {'shape': 'triangle', 'color': 'green', 'count': 2}
+        dict: {'shape': 'triangle', 'color': 'green', 'count': 2, 'background': 'red'} (if bg_color=True)
     """
     # Helper function to convert word numbers to integers
     def word_to_int(word):
@@ -517,11 +526,20 @@ def parse_card_attributes(card_description):
         'cross': 'square'  # Map cross to square since we use square in image.py
     }
     
-    return {
+    result = {
         'shape': shape_map.get(shape, shape),
         'color': color,
         'count': count
     }
+    
+    # Add background color if expected
+    if bg_color and len(parts) > 3:
+        result['background'] = parts[3]
+    elif bg_color:
+        # Default background if not specified
+        result['background'] = 'white'
+    
+    return result
 
 def find_matching_card(given_attrs, rule):
     """
@@ -541,7 +559,8 @@ def find_matching_card(given_attrs, rule):
         {'shape': 'star', 'color': 'blue', 'count': 3, 'background': 'blue'},       # Card 3
         {'shape': 'square', 'color': 'yellow', 'count': 4, 'background': 'yellow'}    # Card 4
     ]
-    
+
+    # Map rule names to attribute names
     rule_map = {
         'color': 'color',
         'shape': 'shape', 
@@ -549,12 +568,15 @@ def find_matching_card(given_attrs, rule):
         'background': 'background'
     }
     
-    attribute = rule_map[rule]
-    given_value = given_attrs[attribute]
+    attribute = rule_map.get(rule, rule)
+    given_value = given_attrs.get(attribute)
+    
+    if given_value is None:
+        raise ValueError(f"Given card does not have attribute '{attribute}' for rule '{rule}'")
     
     for i, ref_card in enumerate(reference_cards):
         if ref_card[attribute] == given_value:
             return i + 1  # Return 1-based index
     
     # Should not happen if cards are generated correctly
-    return 1
+    raise ValueError(f"No matching card found for rule '{rule}' with value '{given_value}'. Given card: {given_attrs}")  
