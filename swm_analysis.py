@@ -13,9 +13,13 @@ def load_run_stats(stats_file):
 
 def calculate_score(stats):
     """Calculate score for a single run's statistics"""
-    return 1 - (stats["illegal"] + stats["repeated"]) / (
-        stats["guesses"] - stats["invalid"]
-    )
+    # Treat 'nobox' the same as 'illegal' and 'repeated' (penalized moves)
+    illegal_moves = stats.get("illegal", 0) + stats.get("repeated", 0) + stats.get("nobox", 0)
+    denom = stats["guesses"] - stats["invalid"]
+    if denom <= 0:
+        # Avoid division by zero; define worst-case score
+        return 0.0
+    return 1 - illegal_moves / denom
 
 
 def parse_setup(filename):
@@ -31,7 +35,7 @@ def parse_setup(filename):
 
 
 def analyze_results():
-    data_dir = Path("./SWM/data/text")
+    data_dir = Path("./SWM/data/image")
     if not data_dir.exists():
         raise FileNotFoundError("Data directory not found")
 
@@ -59,6 +63,7 @@ def analyze_results():
         illegal = []
         invalid = []
         repeated = []
+        nobox = []
         for run in stats.values():  # each run is a dictionary
             try:
                 score = calculate_score(run)
@@ -67,6 +72,7 @@ def analyze_results():
                 illegal.append(run.get("illegal", 0))
                 invalid.append(run.get("invalid", 0))
                 repeated.append(run.get("repeated", 0))
+                nobox.append(run.get("nobox", 0))
             except (TypeError, KeyError) as e:
                 print(f"Error processing {stats_file}: {e}")
                 continue
@@ -102,6 +108,12 @@ def analyze_results():
                     "std": float(np.std(repeated)),
                     "min": int(np.min(repeated)),
                     "max": int(np.max(repeated)),
+                },
+                "nobox": {
+                    "avg": float(np.mean(nobox)) if nobox else 0.0,
+                    "std": float(np.std(nobox)) if nobox else 0.0,
+                    "min": int(np.min(nobox)) if nobox else 0,
+                    "max": int(np.max(nobox)) if nobox else 0,
                 },
             }
 
