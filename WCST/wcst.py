@@ -296,7 +296,7 @@ def run_wcst(model="llama", variant="card", max_trials=64, num_correct=5, repeat
             json.dump(run_reasoning, f, indent=4)
 
 def run_wcst_image(model="llama", max_trials=64, num_correct=5, repeats=1, bg_color=False,
-                   force_ambig_first=False, few_shot=False, cot=False, hint=False, model_source="hf", max_tokens=512, 
+                   ambiguous_mode="off", few_shot=False, cot=False, hint=False, model_source="hf", max_tokens=512, 
                    think_budget=64, api_key=None, verbose=15):
     """
     Run the Wisconsin Card Sorting Test (WCST) with visual card images.
@@ -392,16 +392,22 @@ def run_wcst_image(model="llama", max_trials=64, num_correct=5, repeats=1, bg_co
             for _ in range(2):     # Twice per rule
                 for rule in rules:
                     correct_cnt = 0
-                    force_ambig = True if force_ambig_first else False
-                    
+                    force_ambig = True if ambiguous_mode == "first" else False
+
                     with tqdm(total=num_correct, desc=f"Correct answers for {rule}") as correct_bar:
                         while correct_cnt < num_correct:
                             if n_trials >= max_trials:
                                 break
                             
                             # Generate card attributes for the given card
-                            given_attrs, option_cards = wcst_generator(rule, False, bg_color=bg_color, ambiguous=force_ambig)
-                            force_ambig = False
+                            if ambiguous_mode != "off":
+                                given_attrs, option_cards = wcst_generator(rule, False, bg_color=bg_color, ambiguous=force_ambig)
+                                if ambiguous_mode == "rest":    # After the first non-ambiguous trial, keep all subsequent trials ambiguous
+                                    force_ambig = True
+                                else:                           # Only the first trial is ambiguous
+                                    force_ambig = False
+                            else:
+                                given_attrs, option_cards = wcst_generator(rule, False, bg_color=bg_color)  # Ambiguity not regulated
                             
                             # Convert text representation to image attributes
                             given_card_attrs = parse_card_attributes(given_attrs, bg_color=bg_color)
