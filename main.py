@@ -52,10 +52,12 @@ Examples:
     wcst_parser.add_argument("--max_trials", type=int, default=64)
     wcst_parser.add_argument("--num_correct", type=int, default=5)
     wcst_parser.add_argument("--repeats", type=int, default=1)
+    wcst_parser.add_argument("--ambiguous", type=str, default="off", choices=["off", "first", "rest"])
     wcst_parser.add_argument("--few_shot", action="store_true")
     wcst_parser.add_argument("--cot", action="store_true")
     wcst_parser.add_argument("--hint", action="store_true")
     wcst_parser.add_argument("--image", action="store_true")
+    wcst_parser.add_argument("--bg-color", action="store_true")
     wcst_parser.add_argument(
         "--model_source",
         type=str,
@@ -190,6 +192,8 @@ Examples:
                 max_trials=args.max_trials,
                 num_correct=args.num_correct,
                 repeats=args.repeats,
+                bg_color=args.bg_color,
+                ambiguous_mode=args.ambiguous,
                 few_shot=args.few_shot,
                 cot=args.cot,
                 hint=args.hint,
@@ -208,6 +212,7 @@ Examples:
                 max_trials=args.max_trials,
                 num_correct=args.num_correct,
                 repeats=args.repeats,
+                bg_color=args.bg_color,
                 few_shot=args.few_shot,
                 cot=args.cot,
                 hint=args.hint,

@@ -4,11 +4,11 @@ From https://github.com/OttoKuosmanen/WCST
 
 from PIL import Image, ImageOps
 
-star = 'WCST/images/shapes/star.png'
-circle = 'WCST/images/shapes/circle.png'
-square = 'WCST/images/shapes/square.png'
-triangle = 'WCST/images/shapes/triangle.png'
-frame = 'WCST/images/shapes/frame.png'
+star = 'shapes/star.png'
+circle = 'shapes/circle.png'
+square = 'shapes/square.png'
+triangle = 'shapes/triangle.png'
+frame = 'shapes/frame.png'
 
 star = Image.open(star)
 circle = Image.open(circle)
@@ -31,8 +31,15 @@ green = (11, 218, 81)
 blue = (25, 25, 112)
 yellow = (254, 219, 0)
 
+# Background colors (lighter versions)
+bg_red = (255, 182, 182)
+bg_green = (182, 255, 182)
+bg_blue = (182, 182, 255)
+bg_yellow = (255, 255, 182)
+
 shapes = [circle, square, triangle, star]
 colors = [blue, yellow, red, green]
+bg_colors = [bg_red, bg_green, bg_blue, bg_yellow]  # Corresponding background colors
 numbers = [1, 2, 3, 4]
 
 positions = {
@@ -42,9 +49,9 @@ positions = {
     4: [(25, 92), (67, 92), (25, 48), (67, 48)]
 }
 
-def create_cards(numbers, shapes, colors, positions):
-    for shape in shapes:
-        for color in colors:
+def create_cards(numbers, shapes, colors, bg_colors, positions):
+    for i, shape in enumerate(shapes):
+        for j, color in enumerate(colors):
             for number in numbers:
                 black, transparent = shape.split()
                 changeling = ImageOps.colorize(black, color, color)
@@ -53,11 +60,20 @@ def create_cards(numbers, shapes, colors, positions):
                 # Deduce shape and color names for saving
                 s = ["circle", "square", "triangle", "star"][shapes.index(shape)]
                 c = ["blue", "yellow", "red", "green"][colors.index(color)]
+                bg_name = ["red", "green", "blue", "yellow"][i]  # Background color based on shape index
                 
+                # Create card with background color
                 card = frame.copy()
+                
+                # Apply background color (from the predefined mapping)
+                bg_color = bg_colors[i]  # Background color corresponds to shape
+                bg_overlay = Image.new('RGBA', card.size, bg_color + (200,))  # Semi-transparent
+                card = Image.alpha_composite(card, bg_overlay)
+                
+                # Add shapes
                 for pos in positions[number]:
                     card.paste(changeling, pos, mask=changeling)
                 
-                card.save(f"WCST/images/cards/{number}_{s}_{c}.png")
+                card.save(f"cards/{number}_{s}_{c}_{bg_name}_bg.png")
 
-create_cards(numbers, shapes, colors, positions)
+create_cards(numbers, shapes, colors, bg_colors, positions)
