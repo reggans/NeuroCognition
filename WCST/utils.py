@@ -1,6 +1,6 @@
 import random, string
 
-def wcst_generator(rule, randomize=False, bg_color=False, ambiguous=False):
+def wcst_generator(rule, randomize=False, bg_color=False, ambiguous=None):
     rules = ["number", "color", "shape"]
     if bg_color:
         rules.append("background")
@@ -40,6 +40,8 @@ def wcst_generator(rule, randomize=False, bg_color=False, ambiguous=False):
             given_card[r] = match_attr
         elif addtnl_attr and r == addtnl_attr[0]:
             given_card[r] = addtnl_attr[1]
+        elif not ambiguous:
+            given_card[r] = random.choice([card[r] for card in options if card[r] != match_attr])
         else:
             given_card[r] = random.choice([card[r] for card in options])
     
