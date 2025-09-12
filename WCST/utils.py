@@ -1,20 +1,33 @@
 import random, string
 
-def wcst_generator(rule, randomize=False):
+def wcst_generator(rule, randomize=False, bg_color=False, ambiguous=None):
     rules = ["number", "color", "shape"]
+    if bg_color:
+        rules.append("background")
 
     if rule not in rules:
         raise Exception("Rule not recognized")
     
-    options = [{"number": "one", "color": "red", "shape": "circle"},
-               {"number": "two", "color": "green", "shape": "triangle"},
-               {"number": "three", "color": "blue", "shape": "star"},
-               {"number": "four", "color": "yellow", "shape": "square"},
-               ]
+    if bg_color:
+        options = [{"number": "one", "color": "red", "shape": "circle", "background": "red"},
+                {"number": "two", "color": "green", "shape": "triangle", "background": "green"},
+                {"number": "three", "color": "blue", "shape": "star", "background": "blue"},
+                {"number": "four", "color": "yellow", "shape": "square", "background": "yellow"},
+                ]
+    else:
+        options = [{"number": "one", "color": "red", "shape": "circle"},
+                {"number": "two", "color": "green", "shape": "triangle"},
+                {"number": "three", "color": "blue", "shape": "star"},
+                {"number": "four", "color": "yellow", "shape": "square"},
+                ]
     
     ans = random.choice(options)
 
     match_attr = ans[rule]
+    addtnl_attr = None
+    if ambiguous:
+        addtnl_attr = random.choice([attr for attr in ans.items() if attr[0] != rule])  # Additional rule-value for ambiguity
+
     card_set = [card for card in options if card[rule] == match_attr] # Correct choice
 
     options.remove(ans)
@@ -25,6 +38,10 @@ def wcst_generator(rule, randomize=False):
     for r in rules:
         if r == rule:
             given_card[r] = match_attr
+        elif addtnl_attr and r == addtnl_attr[0]:
+            given_card[r] = addtnl_attr[1]
+        elif not ambiguous:
+            given_card[r] = random.choice([card[r] for card in options if card[r] != match_attr])
         else:
             given_card[r] = random.choice([card[r] for card in options])
     
@@ -252,3 +269,55 @@ def generate_few_shot(variant):
         raise Exception("Variant not recognized")
     
     return prompt
+
+def check_rule_ambiguity(given_card_str, true_answer_str, bg_color=False):
+    """
+    Check if multiple rules could lead to the same correct answer for a given card.
+    
+    Args:
+        given_card_str: String representation of the given card (e.g., "two green triangles")
+        true_answer_str: String representation of the correct answer card
+        bg_color: Whether to include background color in the analysis
+    
+    Returns:
+        bool: True if multiple rules could match, False otherwise
+    """
+    # Parse given card attributes
+    given_parts = given_card_str.split()
+    true_parts = true_answer_str.split()
+    
+    if bg_color and len(given_parts) >= 4 and len(true_parts) >= 4:
+        given_attrs = {
+            'number': given_parts[0],
+            'color': given_parts[1], 
+            'shape': given_parts[2].rstrip('s'),  # Remove plural
+            'background': given_parts[3] if len(given_parts) > 3 else 'white'
+        }
+        true_attrs = {
+            'number': true_parts[0],
+            'color': true_parts[1],
+            'shape': true_parts[2].rstrip('s'),
+            'background': true_parts[3] if len(true_parts) > 3 else 'white'
+        }
+        rules_to_check = ['number', 'color', 'shape', 'background']
+    else:
+        given_attrs = {
+            'number': given_parts[0],
+            'color': given_parts[1],
+            'shape': given_parts[2].rstrip('s')  # Remove plural
+        }
+        true_attrs = {
+            'number': true_parts[0],
+            'color': true_parts[1],
+            'shape': true_parts[2].rstrip('s')
+        }
+        rules_to_check = ['number', 'color', 'shape']
+    
+    # Count how many rules match between given card and true answer
+    matching_rules = 0
+    for rule in rules_to_check:
+        if given_attrs[rule] == true_attrs[rule]:
+            matching_rules += 1
+    
+    # Ambiguous if more than one rule matches
+    return matching_rules > 1
