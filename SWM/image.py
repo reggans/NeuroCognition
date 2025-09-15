@@ -14,6 +14,7 @@ class SWMImage:
         self.box_coords = []
         self.save_path = save_path
         self.padding = 5  # Padding to make boxes smaller than grid cells
+        self.token_colors = ['red', 'blue', 'green', 'purple',]
 
         x_max, y_max = img_size
         font_size = 15
@@ -61,7 +62,10 @@ class SWMImage:
         y = grid_y * self.box_width + self.box_width / 2 + self.margin
         return x, y
 
-    def open_box(self, box_coord, token):
+    def open_box(self, box_coord, tokens):
+        if len(tokens) > len(self.token_colors):
+            raise ValueError(f"Number of tokens {len(tokens)} exceeds available colors {len(self.token_colors)}")
+        
         if box_coord not in self.box_coords:
             return self.base_img
         
@@ -76,12 +80,13 @@ class SWMImage:
                             box_center[0] + self.box_width/2 - hole_padding, box_center[1] + self.box_width/2 - hole_padding),
                             fill='black')
 
-        if token == box:
-            # Draw the red token smaller inside the opened box
+        if box in tokens:
+            token_color = self.token_colors[tokens.index(box)]
+            # Draw the token smaller inside the opened box
             token_padding = self.padding + 10
             draw.rectangle((box_center[0] - self.box_width/2 + token_padding, box_center[1] - self.box_width/2 + token_padding,
                             box_center[0] + self.box_width/2 - token_padding, box_center[1] + self.box_width/2 - token_padding),
-                            fill='red')
+                            fill=token_color)
         
         new_img.save(os.path.join(self.save_path, f'current.png'))
         

@@ -27,14 +27,14 @@ def image_swm(
     note_assist=False,
     image_only=False,
 ):
-    if n_tokens > 1 or note_assist:
+    if note_assist:
         raise NotImplementedError
 
     # Initiate w/ task prompt
     task_prompt = f"""You will be performing the Spatial Working Memory task. 
-You will be given an image containing 8 yellow boxes in a grid. 
-One of the boxes contains a red token. 
-Your goal is to find the token 8 times by repeatedly selecting a box to open.
+You will be given an image containing {n_boxes} yellow boxes in a grid. 
+There are {n_tokens} types of tokens, hidden in any one of {n_boxes} boxes.
+Your goal is to find the {n_tokens} types of tokens {n_boxes} times each, by repeatedly selecting a box to open.
 Once the token is found, another will be generated in another box. 
 The token will be generated in a box that has never contained the token before in the trial. 
 The token may be generated in a box that has been opened and found empty before, as long as it never contained that type of token previously. 
@@ -43,6 +43,8 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
     model.init_chat(task_prompt)
 
     # Configure the question presented each turn and CoT prompt
+
+    
     if cot is not None:
         cot_prompt = f"Think step-by-step, utilizing information from previous feedbacks, and state your reasoning in maximum {think_budget} tokens, wrapped with <think> and </think>. Then, provide a really short summary of your reasoning after the closing </think> tag.\n"
         question = f"Answer concisely. {cot_prompt}Which of the {n_boxes} boxes would you like to open?\nYour final answer should be a grid coordinate (x, y), wrapped with <answer> and </answer>"
@@ -211,7 +213,7 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                         invalid_guess += 1
                         continue
 
-                    swm_gen.open_box(chosen_coord, token_box[tokens[0]])
+                    swm_gen.open_box(chosen_coord, [token_box[t] for t in tokens])
 
                     legal = False
                     for legal in legal_boxes.values():
