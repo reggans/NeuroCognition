@@ -248,7 +248,7 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                     run_history.append(
                         {
                             "token_box": [
-                                swm_gen.get_box_coord(token_box[t]) for t in tokens
+                                swm_gen.get_box_coord(token_box[t]) for t in tokens if token_box[t] is not None
                             ],
                             "chosen_coord": chosen_coord,
                             "found": found,
