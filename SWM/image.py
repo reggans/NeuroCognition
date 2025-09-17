@@ -62,11 +62,12 @@ class SWMImage:
         y = grid_y * self.box_width + self.box_width / 2 + self.margin
         return x, y
 
-    def open_box(self, box_coord, tokens):
-        if len(tokens) > len(self.token_colors):
-            raise ValueError(f"Number of tokens {len(tokens)} exceeds available colors {len(self.token_colors)}")
-        
+    def open_box(self, box_coord, token_box):
+        if len(token_box) > len(self.token_colors):
+            raise ValueError(f"Number of tokens {len(token_box)} exceeds available colors {len(self.token_colors)}")
+
         if box_coord not in self.box_coords:
+            self.base_img.save(os.path.join(self.save_path, f'current.png'))
             return self.base_img
         
         box = self.get_box_id(box_coord)
@@ -80,13 +81,63 @@ class SWMImage:
                             box_center[0] + self.box_width/2 - hole_padding, box_center[1] + self.box_width/2 - hole_padding),
                             fill='black')
 
-        if box in tokens:
-            token_color = self.token_colors[tokens.index(box)]
-            # Draw the token smaller inside the opened box
-            token_padding = self.padding + 10
-            draw.rectangle((box_center[0] - self.box_width/2 + token_padding, box_center[1] - self.box_width/2 + token_padding,
-                            box_center[0] + self.box_width/2 - token_padding, box_center[1] + self.box_width/2 - token_padding),
-                            fill=token_color)
+        if box in token_box.values():
+            # Get all instances of this box in the tokens list
+            token_colors = [color for color, b in token_box.items() if b == box]
+            num_tokens = len(token_colors)
+
+            if num_tokens == 1:
+                # Single token - fill the entire opened box
+                token_color = token_colors[0]
+                token_padding = self.padding + 10
+                draw.rectangle((box_center[0] - self.box_width/2 + token_padding, box_center[1] - self.box_width/2 + token_padding,
+                                box_center[0] + self.box_width/2 - token_padding, box_center[1] + self.box_width/2 - token_padding),
+                                fill=token_color)
+            else:
+                # Multiple tokens - divide the box space
+                token_padding = self.padding + 10
+                box_inner_width = self.box_width - 2 * token_padding
+                box_inner_height = self.box_width - 2 * token_padding
+                
+                if num_tokens == 2:
+                    # Split horizontally for 2 tokens
+                    token_width = box_inner_width // 2
+                    for i, token_color in enumerate(token_colors):
+                        x_start = box_center[0] - self.box_width/2 + token_padding + i * token_width
+                        draw.rectangle((x_start, box_center[1] - self.box_width/2 + token_padding,
+                                        x_start + token_width, box_center[1] + self.box_width/2 - token_padding),
+                                        fill=token_color)
+                elif num_tokens == 3:
+                    # Split into 2 on top, 1 on bottom
+                    token_height = box_inner_height // 2
+                    token_width = box_inner_width // 2
+                    
+                    # Top two tokens
+                    for i in range(2):
+                        token_color = token_colors[i]
+                        x_start = box_center[0] - self.box_width/2 + token_padding + i * token_width
+                        draw.rectangle((x_start, box_center[1] - self.box_width/2 + token_padding,
+                                        x_start + token_width, box_center[1] - self.box_width/2 + token_padding + token_height),
+                                        fill=token_color)
+                    
+                    # Bottom token (centered)
+                    token_color = token_colors[2]
+                    draw.rectangle((box_center[0] - token_width/2, box_center[1] - self.box_width/2 + token_padding + token_height,
+                                    box_center[0] + token_width/2, box_center[1] + self.box_width/2 - token_padding),
+                                    fill=token_color)
+                else:
+                    # 4 or more tokens - split into 2x2 grid
+                    token_width = box_inner_width // 2
+                    token_height = box_inner_height // 2
+
+                    for i, token_color in enumerate(token_colors[:4]):  # Limit to 4 tokens max
+                        row = i // 2
+                        col = i % 2
+                        x_start = box_center[0] - self.box_width/2 + token_padding + col * token_width
+                        y_start = box_center[1] - self.box_width/2 + token_padding + row * token_height
+                        draw.rectangle((x_start, y_start,
+                                        x_start + token_width, y_start + token_height),
+                                        fill=token_color)
         
         new_img.save(os.path.join(self.save_path, f'current.png'))
         
