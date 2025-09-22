@@ -222,13 +222,17 @@ class ModelWrapper:
                 raw_response = raw_resp.choices[0].message.content
             except:
                 time.sleep(5)
-                raw_resp = self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=self.history,
-                    max_completion_tokens=max_new_tokens or self.max_new_tokens,
-                    extra_body=extra_body,
-                )
-                raw_response = raw_resp.choices[0].message.content
+                try:
+                    raw_resp = self.client.chat.completions.create(
+                        model=self.model_name,
+                        messages=self.history,
+                        max_completion_tokens=max_new_tokens or self.max_new_tokens,
+                        extra_body=extra_body,
+                    )
+                    raw_response = raw_resp.choices[0].message.content
+                except Exception as e:
+                    print(f"OpenAI API error after retry: {e}")
+                    return None
         else:
             try:
                 raw_resp = self.client.chat.completions.create(
@@ -248,21 +252,25 @@ class ModelWrapper:
                 raw_reasoning = raw_resp.choices[0].message.reasoning
             except:
                 time.sleep(5)
-                raw_resp = self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=self.history,
-                    max_tokens=max_new_tokens or self.max_new_tokens,
-                    temperature=0.0,
-                    # top_p=0.95,
-                    extra_body=extra_body,
-                )
-                if raw_resp.choices[0].finish_reason == "error":
-                    print(raw_resp)
-                    print(
-                        f"Model returned error: {raw_resp.choices[0].message.content}"
+                try:
+                    raw_resp = self.client.chat.completions.create(
+                        model=self.model_name,
+                        messages=self.history,
+                        max_tokens=max_new_tokens or self.max_new_tokens,
+                        temperature=0.0,
+                        # top_p=0.95,
+                        extra_body=extra_body,
                     )
-                raw_response = raw_resp.choices[0].message.content
-                raw_reasoning = raw_resp.choices[0].message.reasoning
+                    if raw_resp.choices[0].finish_reason == "error":
+                        print(raw_resp)
+                        print(
+                            f"Model returned error: {raw_resp.choices[0].message.content}"
+                        )
+                    raw_response = raw_resp.choices[0].message.content
+                    raw_reasoning = raw_resp.choices[0].message.reasoning
+                except Exception as e:
+                    print(f"API error after retry: {e}")
+                    return None
 
         # Add this code after getting raw_response but before updating history
         if cot:
