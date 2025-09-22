@@ -17,7 +17,6 @@ except ImportError:
     from shared.model_wrapper import ModelWrapper
 from .image import SWMImage
 
-
 def image_swm(
     model,
     n_boxes,
@@ -55,12 +54,15 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
     for token in tokens:
         legal_boxes[token] = [x for x in range(1, n_boxes + 1)]
 
-    worst_case_n = n_boxes**2
-    total_guess = 0
-    illegal_guess = 0
-    invalid_guess = 0
-    repeated_guess = 0
-    nobox_guess = 0
+    run_stats = {
+        "worst_case_guesses": n_boxes**2,
+        "illegal": 0,
+        "guesses": 0,
+        "invalid": 0,
+        "repeated": 0,
+        "nobox": 0,
+        "finished_run": False,
+    }
 
     run_history = []
 
@@ -69,7 +71,9 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
 
     # Start the test
     response = model.send_message(question, cot=cot)
-    with tqdm(total=worst_case_n, desc="Total guesses") as guess_bar:
+    if response is None:
+        return run_stats, run_history
+    with tqdm(total=run_stats["worst_case_guesses"], desc="Total guesses") as guess_bar:
         with tqdm(total=n_boxes * n_tokens, desc="Tokens") as token_bar:
             token_box = dict.fromkeys(tokens)
             for token in tokens:
@@ -91,7 +95,7 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                 # End test
                 if all([len(legal) == 0 for legal in legal_boxes.values()]):
                     break
-                if total_guess >= worst_case_n:
+                if total_guess >= run_stats["worst_case_guesses"]:
                     break
 
                 opened_boxes = set()
@@ -104,7 +108,7 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                     with open("data/temp_history.json", "w") as f:
                         json.dump(model.history, f, indent=4)
 
-                    if total_guess >= worst_case_n:
+                    if total_guess >= run_stats["worst_case_guesses"]:
                         break
 
                     # Note-taking assistance
@@ -158,7 +162,11 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                                 truncate_history=True,
                                 cot=cot,
                             )
-                            invalid_guess += 1
+                            run_stats["invalid"] += 1
+
+                            if response is None:
+                                return run_stats, run_history
+                            
                             continue
                         try:
                             chosen_box = swm_gen.get_box_id(chosen_coord)
@@ -184,8 +192,11 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                                 truncate_history=True,
                                 cot=cot,
                             )
+                            run_stats["nobox"] += 1
 
-                            nobox_guess += 1
+                            if response is None:
+                                return run_stats, run_history
+                            
                             continue
                     else:
                         run_history.append(
@@ -208,7 +219,11 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                             truncate_history=True,
                             cot=cot,
                         )
-                        invalid_guess += 1
+                        run_stats["invalid"] += 1
+
+                        if response is None:
+                            return run_stats, run_history
+
                         continue
 
                     swm_gen.open_box(chosen_coord, token_box[tokens[0]])
@@ -219,9 +234,9 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                             legal = True
                             break
                     if not legal:
-                        illegal_guess += 1
+                        run_stats["illegal"] += 1
                     elif chosen_box in opened_boxes:
-                        repeated_guess += 1
+                        run_stats["repeated"] += 1
 
                     opened_boxes.add(chosen_box)
 
@@ -261,16 +276,11 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                         model.history[-2]["content"][0][
                             "text"
                         ] = msg  # Truncate user response length
+                    
+                    if response is None:
+                        return run_stats, run_history
 
-    run_stats = {
-        "worst_case_guesses": worst_case_n,
-        "illegal": illegal_guess,
-        "guesses": total_guess,
-        "invalid": invalid_guess,
-        "repeated": repeated_guess,
-        "nobox": nobox_guess,
-    }
-
+    run_stats["finished_run"] = True
     return run_stats, run_history
 
 
@@ -317,6 +327,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
     invalid_guess = 0
     repeated_guess = 0
     nobox_guess = 0
+    valid_guess = 0
 
     run_history = []
 
@@ -438,6 +449,8 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         illegal_guess += 1
                     elif chosen_box in opened_boxes:
                         repeated_guess += 1
+                    else:
+                        valid_guess += 1
 
                     opened_boxes.add(chosen_box)
 
@@ -477,6 +490,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
         "invalid": invalid_guess,
         "repeated": repeated_guess,
         "nobox": nobox_guess,
+        "valid": valid_guess,
     }
 
     return run_stats, run_history

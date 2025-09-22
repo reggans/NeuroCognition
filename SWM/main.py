@@ -124,10 +124,11 @@ def swm_main(model=None, model_source="hf", n_boxes=6, n_tokens=1, image_only=Fa
     avg_stats = {}
     for key in run_stats["run_1"].keys():
         if type(run_stats["run_1"][key]) == int:
-            avg_stats[key] = np.mean([stats[key] for stats in run_stats.values()])
+            avg_stats[key] = np.mean([stats[key] for stats in run_stats.values() if stats.get("finished_run", False)])
     
     for key, value in avg_stats.items():
         print(f"{key}: {value}")
+    print(f"Unfinished runs: {sum([1 for stats in run_stats.values() if not stats.get('finished_run', False)])} out of {runs}")
     
     tot_score = 0
     for stats in run_stats.values():
