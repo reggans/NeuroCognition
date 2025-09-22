@@ -128,9 +128,9 @@ def swm_main(model=None, model_source="hf", n_boxes=6, n_tokens=1, image_only=Fa
     
     for key, value in avg_stats.items():
         print(f"{key}: {value}")
-    print(f"Unfinished runs: {sum([1 for stats in run_stats.values() if not stats.get('finished_run', False)])} out of {runs}")
     
     tot_score = 0
     for stats in run_stats.values():
         tot_score += score(stats)
     print(f'Score: {tot_score / len(run_stats.keys())}')
+    print(f"Finished runs: {sum([1 for stats in run_stats.values() if not stats.get('finished_run', False)])} out of {runs}")
