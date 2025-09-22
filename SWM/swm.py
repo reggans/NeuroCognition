@@ -26,30 +26,39 @@ def image_swm(
     note_assist=False,
     image_only=False,
 ):
-    if n_tokens > 1 or note_assist:
+    if note_assist:
         raise NotImplementedError
 
     # Initiate w/ task prompt
     task_prompt = f"""You will be performing the Spatial Working Memory task. 
-You will be given an image containing 8 yellow boxes in a grid. 
-One of the boxes contains a red token. 
-Your goal is to find the token 8 times by repeatedly selecting a box to open.
+You will be given an image containing {n_boxes} yellow boxes in a grid. 
+There are {n_tokens} types of tokens, hidden in any one of {n_boxes} boxes.
+Each token type is represented by a distinct color.
+Your goal is to find the {n_tokens} types of tokens {n_boxes} times each, by repeatedly selecting a box to open.
+A box can contain multiple types of tokens, but only one token of each type.
+If the box contains multiple tokens, a token with mixed colors corresponding to the tokens will be shown.
 Once the token is found, another will be generated in another box. 
-The token will be generated in a box that has never contained the token before in the trial. 
+The token will be generated in a box that has never contained a token of that type before in the trial. 
 The token may be generated in a box that has been opened and found empty before, as long as it never contained that type of token previously. 
 Your final answer should be a coordinate (x, y), the grid coordinate of the box you choose.
 """
     model.init_chat(task_prompt)
 
     # Configure the question presented each turn and CoT prompt
+
+    
     if cot is not None:
         cot_prompt = f"Think step-by-step, utilizing information from previous feedbacks, and state your reasoning in maximum {think_budget} tokens, wrapped with <think> and </think>. Then, provide a really short summary of your reasoning after the closing </think> tag.\n"
         question = f"Answer concisely. {cot_prompt}Which of the {n_boxes} boxes would you like to open?\nYour final answer should be a grid coordinate (x, y), wrapped with <answer> and </answer>"
     else:
         question = f"Answer only with your final answer. Which of the {n_boxes} boxes would you like to open?\nYour final answer should be a grid coordinate (x, y), wrapped with <answer> and </answer>"
 
+    # Initialize image generator
+    os.makedirs("SWM/images", exist_ok=True)
+    swm_gen = SWMImage("SWM/images", n_boxes)
+
     # Initialize run statistics & variables
-    tokens = [string.ascii_uppercase[x] for x in range(n_tokens)]
+    tokens = [swm_gen.token_colors[i] for i in range(n_tokens)]
     legal_boxes = dict.fromkeys(tokens)
     for token in tokens:
         legal_boxes[token] = [x for x in range(1, n_boxes + 1)]
@@ -61,13 +70,11 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
         "invalid": 0,
         "repeated": 0,
         "nobox": 0,
+        "valid": 0,
         "finished_run": False,
     }
 
     run_history = []
-
-    os.makedirs("SWM/images", exist_ok=True)
-    swm_gen = SWMImage("SWM/images", n_boxes)
 
     # Start the test
     response = model.send_message(question, cot=cot)
@@ -84,6 +91,7 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
             while True:
                 for token in found_tokens:
                     if len(legal_boxes[token]) == 0:
+                        token_box[token] = None
                         continue
                     token_box[token] = random.choice(legal_boxes[token])
                     # tqdm.write(f"Token {token} put in box {token_box[token]}")
@@ -95,20 +103,20 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                 # End test
                 if all([len(legal) == 0 for legal in legal_boxes.values()]):
                     break
-                if total_guess >= run_stats["worst_case_guesses"]:
+                if run_stats["guesses"] >= run_stats["worst_case_guesses"]:
                     break
 
                 opened_boxes = set()
                 found_tokens = []
                 found = False
                 while not found:
-                    total_guess += 1
+                    run_stats["guesses"] += 1
                     guess_bar.update(1)
 
                     with open("data/temp_history.json", "w") as f:
                         json.dump(model.history, f, indent=4)
 
-                    if total_guess >= run_stats["worst_case_guesses"]:
+                    if run_stats["guesses"] >= run_stats["worst_case_guesses"]:
                         break
 
                     # Note-taking assistance
@@ -226,22 +234,24 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
 
                         continue
 
-                    swm_gen.open_box(chosen_coord, token_box[tokens[0]])
+                    swm_gen.open_box(chosen_coord, token_box)
 
                     legal = False
-                    for legal in legal_boxes.values():
-                        if chosen_box in legal:
+                    for legal_list in legal_boxes.values():
+                        if chosen_box in legal_list:
                             legal = True
                             break
                     if not legal:
                         run_stats["illegal"] += 1
                     elif chosen_box in opened_boxes:
                         run_stats["repeated"] += 1
+                    else:
+                        run_stats["valid"] += 1
 
                     opened_boxes.add(chosen_box)
 
                     for token in tokens:
-                        if chosen_box == token_box[token]:
+                        if token_box[token] is not None and chosen_box == token_box[token]:
                             found = True
                             token_bar.update(1)
                             legal_boxes[token].remove(chosen_box)
@@ -256,7 +266,7 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                     run_history.append(
                         {
                             "token_box": [
-                                swm_gen.get_box_coord(token_box[t]) for t in tokens
+                                swm_gen.get_box_coord(token_box[t]) for t in tokens if token_box[t] is not None
                             ],
                             "chosen_coord": chosen_coord,
                             "found": found,

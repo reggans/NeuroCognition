@@ -9,7 +9,13 @@ import sys
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from .utils import generate_few_shot, wcst_generator, string_generator, check_rule_ambiguity
+from .utils import (
+    generate_few_shot,
+    wcst_generator,
+    string_generator,
+    check_rule_ambiguity,
+)
+
 try:
     from ..shared.model_wrapper import ModelWrapper
 except ImportError:
@@ -97,12 +103,24 @@ Your final answer should be a number between 1-4 corresponding to the index of t
 """
 
 
-def run_wcst(model="llama", variant="card", max_trials=64, num_correct=5, repeats=1, 
-             few_shot=False, cot=False, hint=False, model_source="hf", max_tokens=512, 
-             think_budget=64, api_key=None, verbose=15):
+def run_wcst(
+    model="llama",
+    variant="card",
+    max_trials=64,
+    num_correct=5,
+    repeats=1,
+    few_shot=False,
+    cot=False,
+    hint=False,
+    model_source="hf",
+    max_tokens=512,
+    think_budget=64,
+    api_key=None,
+    verbose=15,
+):
     """
     Run the Wisconsin Card Sorting Test (WCST).
-    
+
     Args:
         model: The model to use
         variant: The variant of the test ("card", "card-random", "string", "empty")
@@ -122,32 +140,45 @@ def run_wcst(model="llama", variant="card", max_trials=64, num_correct=5, repeat
 
     os.makedirs(os.path.join("WCST", "data", "text"), exist_ok=True)
 
-    save_path = os.path.join("WCST", "data", "text", f"{model_source}_{model.replace('/', '-')}_{variant}_{max_trials}-{num_correct}.json")
+    save_path = os.path.join(
+        "WCST",
+        "data",
+        "text",
+        f"{model_source}_{model.replace('/', '-')}_{variant}_{max_trials}-{num_correct}.json",
+    )
 
     if few_shot and cot:
         save_path = save_path.replace(".json", "_few_shot_cot.json")
-    
+
     elif few_shot:
         save_path = save_path.replace(".json", "_few_shot.json")
-    
+
     elif cot:
         save_path = save_path.replace(".json", "_cot.json")
-    
+
     print(f"Saving to: {save_path}")
 
     # Check if results already exist
     if os.path.exists(save_path):
         print(f"Results already exist at {save_path}")
-        with open(save_path, 'r') as f:
+        with open(save_path, "r") as f:
             save = json.load(f)
-            
+
         # Calculate and display statistics for each run
         for run_key in save:
             save_rep = save[run_key]
             total_trials = len(save_rep)
-            total_correct = sum(1 for row in save_rep if "correct" in row and row["correct"])
-            completed_categories = len(set(row["rule"] for row in save_rep if "correct" in row and row["correct"]))
-            
+            total_correct = sum(
+                1 for row in save_rep if "correct" in row and row["correct"]
+            )
+            completed_categories = len(
+                set(
+                    row["rule"]
+                    for row in save_rep
+                    if "correct" in row and row["correct"]
+                )
+            )
+
             print(f"\n{run_key.title()} Statistics:")
             print(f"Completed categories: {completed_categories}")
             print(f"Total number of trials: {total_trials}")
@@ -183,13 +214,15 @@ def run_wcst(model="llama", variant="card", max_trials=64, num_correct=5, repeat
     save = {}
     run_history = {}
     run_reasoning = {}  # Add new dictionary for reasoning traces
-    
+
     for rep in range(repeats):
         model_instance = None
         torch.cuda.empty_cache()
         save_rep = []
 
-        model_instance = ModelWrapper(model, model_source, api_key=api_key, max_new_tokens=max_tokens)
+        model_instance = ModelWrapper(
+            model, model_source, api_key=api_key, max_new_tokens=max_tokens
+        )
         model_instance.init_chat(system_prompt)
 
         n_trials = 0
@@ -198,15 +231,17 @@ def run_wcst(model="llama", variant="card", max_trials=64, num_correct=5, repeat
         correct_prefix = ""
 
         with tqdm(total=max_trials, desc="Total trials") as trial_bar:
-            for _ in range(2):      
+            for _ in range(2):
                 for rule in rules:
                     correct_cnt = 0
-                    
-                    with tqdm(total=num_correct, desc=f"Correct answers for {rule}") as correct_bar:
+
+                    with tqdm(
+                        total=num_correct, desc=f"Correct answers for {rule}"
+                    ) as correct_bar:
                         while correct_cnt < num_correct:
                             if n_trials >= max_trials:
                                 break
-                            
+
                             if variant == "card":
                                 given, opt = wcst_generator(rule, False)
                             elif variant == "card-random":
@@ -217,7 +252,7 @@ def run_wcst(model="llama", variant="card", max_trials=64, num_correct=5, repeat
                             if variant == "empty":
                                 chosen = rule
                                 chosen_idx = rule
-                                
+
                                 test_prompt = f"""Options:\n1.\n2.\n3.\n4."""
                             else:
                                 chosen = opt[0]
@@ -225,7 +260,7 @@ def run_wcst(model="llama", variant="card", max_trials=64, num_correct=5, repeat
                                 chosen_idx = opt.index(chosen) + 1
 
                                 test_prompt = f"""Given: {given}\nOptions:\n1. {opt[0]}\n2. {opt[1]}\n3. {opt[2]}\n4. {opt[3]}"""
-                            
+
                             # Add hint
                             if hint:
                                 test_prompt += f"\nRule: {rule}"
@@ -235,12 +270,18 @@ def run_wcst(model="llama", variant="card", max_trials=64, num_correct=5, repeat
                                 if n_trials >= max_trials:
                                     break
                                 trial_bar.update(1)
-            
+
                                 n_trials += 1
-                                response = model_instance.send_message(correct_prefix + test_prompt, truncate_history=True, cot=cot)
+                                response = model_instance.send_message(
+                                    correct_prefix + test_prompt,
+                                    truncate_history=True,
+                                    cot=cot,
+                                )
                                 ans = re.search(r"<answer>(?s:.*)</answer>", response)
                                 if ans:
-                                    ans = re.search(r"<answer>(?s:.*)</answer>", response)[0]
+                                    ans = re.search(
+                                        r"<answer>(?s:.*)</answer>", response
+                                    )[0]
                                     ans = re.sub(r"<answer>|</answer>", "", ans).strip()
                                     if ans == str(chosen_idx):
                                         correct_prefix = "Correct!\n"
@@ -249,7 +290,9 @@ def run_wcst(model="llama", variant="card", max_trials=64, num_correct=5, repeat
                                         total_correct += 1
                                         correct_bar.update(1)
                                     else:
-                                        correct_prefix = "Incorrect. Please try again.\n"
+                                        correct_prefix = (
+                                            "Incorrect. Please try again.\n"
+                                        )
                                         correct_cnt = 0
                                         correct_bar.n = 0
                                         correct_bar.last_print_n = 0
@@ -260,47 +303,67 @@ def run_wcst(model="llama", variant="card", max_trials=64, num_correct=5, repeat
                                     correct_bar.n = 0
                                     correct_bar.last_print_n = 0
                                     correct_bar.refresh()
-                                    
+
                                 if n_trials % 50 == 0:
                                     tqdm.write(f"Rule: {rule}")
                                     tqdm.write(test_prompt)
                                     tqdm.write(response)
 
-                                save_row = {"rule": rule,
-                                            "correct": correct,
-                                            "correct_prefix": correct_prefix,
-                                            "question": test_prompt,
-                                            "response": response,
-                                            "model_ans": ans,
-                                            "true_ans": chosen_idx}
+                                save_row = {
+                                    "rule": rule,
+                                    "correct": correct,
+                                    "correct_prefix": correct_prefix,
+                                    "question": test_prompt,
+                                    "response": response,
+                                    "model_ans": ans,
+                                    "true_ans": chosen_idx,
+                                }
                                 save_rep.append(save_row)
-                    
+
                     if correct_cnt == num_correct:
                         completed_cat += 1
 
         print(f"Completed categories: {completed_cat}")
         print(f"Total number of trials: {n_trials}")
         print(f"Total accuracy: {total_correct/n_trials}")
-    
+
         save[f"run_{rep+1}"] = save_rep
         run_history[f"run_{rep+1}"] = model_instance.history
-        run_reasoning[f"run_{rep+1}"] = model_instance.reasoning_trace  # Save reasoning trace
+        run_reasoning[f"run_{rep+1}"] = (
+            model_instance.reasoning_trace
+        )  # Save reasoning trace
 
         with open(save_path, "w") as f:
             json.dump(save, f, indent=4)
-        
+
         with open(save_path.replace(".json", "_history.json"), "w") as f:
             json.dump(run_history, f, indent=4)
-            
-        with open(save_path.replace(".json", "_reasoning.json"), "w") as f:  # Save reasoning traces
+
+        with open(
+            save_path.replace(".json", "_reasoning.json"), "w"
+        ) as f:  # Save reasoning traces
             json.dump(run_reasoning, f, indent=4)
 
-def run_wcst_image(model="llama", max_trials=64, num_correct=5, repeats=1, bg_color=False,
-                   ambiguous_mode="off", few_shot=False, cot=False, hint=False, model_source="hf", max_tokens=512, 
-                   think_budget=64, api_key=None, verbose=15):
+
+def run_wcst_image(
+    model="llama",
+    max_trials=64,
+    num_correct=5,
+    repeats=1,
+    bg_color=False,
+    ambiguous_mode="off",
+    few_shot=False,
+    cot=False,
+    hint=False,
+    model_source="hf",
+    max_tokens=512,
+    think_budget=64,
+    api_key=None,
+    verbose=15,
+):
     """
     Run the Wisconsin Card Sorting Test (WCST) with visual card images.
-    
+
     Args:
         model: The model to use
         max_trials: Maximum number of trials
@@ -321,7 +384,12 @@ def run_wcst_image(model="llama", max_trials=64, num_correct=5, repeats=1, bg_co
     os.makedirs(os.path.join("WCST", "data", "image"), exist_ok=True)
     os.makedirs(os.path.join("WCST", "images"), exist_ok=True)
 
-    save_path = os.path.join("WCST", "data", "image", f"{model_source}_{model.replace('/', '-')}_image_{max_trials}-{num_correct}{'-bg' if bg_color else ''}.json")
+    save_path = os.path.join(
+        "WCST",
+        "data",
+        "image",
+        f"{model_source}_{model.replace('/', '-')}_image_{max_trials}-{num_correct}{'-bg' if bg_color else ''}_{ambiguous_mode}.json",
+    )
 
     if few_shot and cot:
         save_path = save_path.replace(".json", "_few_shot_cot.json")
@@ -329,28 +397,36 @@ def run_wcst_image(model="llama", max_trials=64, num_correct=5, repeats=1, bg_co
         save_path = save_path.replace(".json", "_few_shot.json")
     elif cot:
         save_path = save_path.replace(".json", "_cot.json")
-    
+
     print(f"Saving to: {save_path}")
 
     # Check if results already exist
     if os.path.exists(save_path):
         print(f"Results already exist at {save_path}")
-        with open(save_path, 'r') as f:
+        with open(save_path, "r") as f:
             save = json.load(f)
-            
+
         # Calculate and display statistics for each run
         for run_key in save:
             save_rep = save[run_key]
             total_trials = len(save_rep)
-            total_correct = sum(1 for row in save_rep if "correct" in row and row["correct"])
-            completed_categories = len(set(row["rule"] for row in save_rep if "correct" in row and row["correct"]))
-            
+            total_correct = sum(
+                1 for row in save_rep if "correct" in row and row["correct"]
+            )
+            completed_categories = len(
+                set(
+                    row["rule"]
+                    for row in save_rep
+                    if "correct" in row and row["correct"]
+                )
+            )
+
             print(f"\n{run_key.title()} Statistics:")
             print(f"Completed categories: {completed_categories}")
             print(f"Total number of trials: {total_trials}")
             print(f"Total accuracy: {total_correct/total_trials:.3f}")
         return
-    
+
     system_prompt = image_prompt
     if not bg_color:
         system_prompt = system_prompt.replace("4. Background color of the card", "")
@@ -367,19 +443,25 @@ def run_wcst_image(model="llama", max_trials=64, num_correct=5, repeats=1, bg_co
     rules = ["color", "shape", "number"]
     if bg_color:
         rules.append("background")
-    
+
     save = {}
     run_history = {}
     run_reasoning = {}
-    
+
     for rep in range(repeats):
         model_instance = None
         torch.cuda.empty_cache()
         save_rep = []
 
         # Initialize model with image input capability
-        model_instance = ModelWrapper(model, model_source, api_key=api_key, max_new_tokens=max_tokens,
-                                    image_input=True, image_path="WCST/images/")
+        model_instance = ModelWrapper(
+            model,
+            model_source,
+            api_key=api_key,
+            max_new_tokens=max_tokens,
+            image_input=True,
+            image_path="WCST/images/",
+        )
         model_instance.init_chat(system_prompt)
 
         n_trials = 0
@@ -389,37 +471,52 @@ def run_wcst_image(model="llama", max_trials=64, num_correct=5, repeats=1, bg_co
         force_ambig = False
 
         with tqdm(total=max_trials, desc="Total trials") as trial_bar:
-            for _ in range(2):     # Twice per rule
+            for _ in range(2):  # Twice per rule
                 for rule in rules:
                     correct_cnt = 0
                     force_ambig = True if ambiguous_mode == "first" else False
 
-                    with tqdm(total=num_correct, desc=f"Correct answers for {rule}") as correct_bar:
+                    with tqdm(
+                        total=num_correct, desc=f"Correct answers for {rule}"
+                    ) as correct_bar:
                         while correct_cnt < num_correct:
                             if n_trials >= max_trials:
                                 break
-                            
+
                             # Generate card attributes for the given card
                             if ambiguous_mode != "off":
-                                given_attrs, option_cards = wcst_generator(rule, False, bg_color=bg_color, ambiguous=force_ambig)
-                                if ambiguous_mode == "rest":    # After the first non-ambiguous trial, keep all subsequent trials ambiguous
+                                given_attrs, option_cards = wcst_generator(
+                                    rule,
+                                    False,
+                                    bg_color=bg_color,
+                                    ambiguous=force_ambig,
+                                )
+                                if (
+                                    ambiguous_mode == "rest"
+                                ):  # After the first non-ambiguous trial, keep all subsequent trials ambiguous
                                     force_ambig = True
-                                else:                           # Only the first trial is ambiguous
+                                else:  # Only the first trial is ambiguous
                                     force_ambig = False
                             else:
-                                given_attrs, option_cards = wcst_generator(rule, False, bg_color=bg_color)  # Ambiguity not regulated
-                            
+                                given_attrs, option_cards = wcst_generator(
+                                    rule, False, bg_color=bg_color
+                                )  # Ambiguity not regulated
+
                             # Convert text representation to image attributes
-                            given_card_attrs = parse_card_attributes(given_attrs, bg_color=bg_color)
-                            
+                            given_card_attrs = parse_card_attributes(
+                                given_attrs, bg_color=bg_color
+                            )
+
                             # Generate the 5-card image
                             draw_five_cards(given_card_attrs, bg_color=bg_color)
-                            
+
                             # Find the correct answer (which of cards 1-4 matches the rule)
-                            correct_card_idx = find_matching_card(given_card_attrs, rule)
+                            correct_card_idx = find_matching_card(
+                                given_card_attrs, rule
+                            )
 
                             test_prompt = "Look at the image showing 5 cards. Match the 'Given' card to one of cards 1-4 based on the rule you need to figure out."
-                            
+
                             # Add hint if enabled
                             if hint:
                                 test_prompt += f"\nRule: {rule}"
@@ -429,12 +526,18 @@ def run_wcst_image(model="llama", max_trials=64, num_correct=5, repeats=1, bg_co
                                 if n_trials >= max_trials:
                                     break
                                 trial_bar.update(1)
-            
+
                                 n_trials += 1
-                                response = model_instance.send_message(correct_prefix + test_prompt, truncate_history=True, cot=cot)
+                                response = model_instance.send_message(
+                                    correct_prefix + test_prompt,
+                                    truncate_history=True,
+                                    cot=cot,
+                                )
                                 ans = re.search(r"<answer>(?s:.*)</answer>", response)
                                 if ans:
-                                    ans = re.search(r"<answer>(?s:.*)</answer>", response)[0]
+                                    ans = re.search(
+                                        r"<answer>(?s:.*)</answer>", response
+                                    )[0]
                                     ans = re.sub(r"<answer>|</answer>", "", ans).strip()
                                     if ans == str(correct_card_idx):
                                         correct_prefix = "Correct!\n"
@@ -443,7 +546,9 @@ def run_wcst_image(model="llama", max_trials=64, num_correct=5, repeats=1, bg_co
                                         total_correct += 1
                                         correct_bar.update(1)
                                     else:
-                                        correct_prefix = "Incorrect. Please try again.\n"
+                                        correct_prefix = (
+                                            "Incorrect. Please try again.\n"
+                                        )
                                         correct_cnt = 0
                                         correct_bar.n = 0
                                         correct_bar.last_print_n = 0
@@ -454,135 +559,164 @@ def run_wcst_image(model="llama", max_trials=64, num_correct=5, repeats=1, bg_co
                                     correct_bar.n = 0
                                     correct_bar.last_print_n = 0
                                     correct_bar.refresh()
-                                    
+
                                 if n_trials % 50 == 0:
                                     tqdm.write(f"Rule: {rule}")
                                     tqdm.write(f"Given card: {given_card_attrs}")
                                     tqdm.write(f"Correct answer: {correct_card_idx}")
                                     tqdm.write(response)
 
-                                save_row = {"rule": rule,
-                                            "correct": correct,
-                                            "correct_prefix": correct_prefix,
-                                            "given_card": given_card_attrs,
-                                            "correct_card": correct_card_idx,
-                                            "ambiguous": check_rule_ambiguity(given_attrs, option_cards[correct_card_idx-1], bg_color=bg_color),
-                                            "response": response,
-                                            "model_ans": ans,
-                                            "true_ans": correct_card_idx}
+                                save_row = {
+                                    "rule": rule,
+                                    "correct": correct,
+                                    "correct_prefix": correct_prefix,
+                                    "given_card": given_card_attrs,
+                                    "correct_card": correct_card_idx,
+                                    "ambiguous": check_rule_ambiguity(
+                                        given_attrs,
+                                        option_cards[correct_card_idx - 1],
+                                        bg_color=bg_color,
+                                    ),
+                                    "response": response,
+                                    "model_ans": ans,
+                                    "true_ans": correct_card_idx,
+                                }
                                 save_rep.append(save_row)
-                    
+
                     if correct_cnt == num_correct:
                         completed_cat += 1
 
         print(f"Completed categories: {completed_cat}")
         print(f"Total number of trials: {n_trials}")
         print(f"Total accuracy: {total_correct/n_trials}")
-    
+
         save[f"run_{rep+1}"] = save_rep
         run_history[f"run_{rep+1}"] = model_instance.history
         run_reasoning[f"run_{rep+1}"] = model_instance.reasoning_trace
 
         with open(save_path, "w") as f:
             json.dump(save, f, indent=4)
-        
+
         with open(save_path.replace(".json", "_history.json"), "w") as f:
             json.dump(run_history, f, indent=4)
-            
+
         with open(save_path.replace(".json", "_reasoning.json"), "w") as f:
             json.dump(run_reasoning, f, indent=4)
+
 
 def parse_card_attributes(card_description, bg_color=False):
     """
     Parse a card description string into attributes dict for image generation.
-    
+
     Args:
         card_description: String like "2 green triangles" or "four green triangles red" (with bg color)
         bg_color: Whether to expect background color in the description
-    
+
     Returns:
         dict: {'shape': 'triangle', 'color': 'green', 'count': 2, 'background': 'red'} (if bg_color=True)
     """
+
     # Helper function to convert word numbers to integers
     def word_to_int(word):
         word_map = {
-            'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
-            'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10
+            "one": 1,
+            "two": 2,
+            "three": 3,
+            "four": 4,
+            "five": 5,
+            "six": 6,
+            "seven": 7,
+            "eight": 8,
+            "nine": 9,
+            "ten": 10,
         }
         return word_map.get(word.lower(), None)
-    
+
     parts = card_description.split()
-    
+
     # Try to parse the first part as an integer, if that fails try word form
     try:
         count = int(parts[0])
     except ValueError:
         count = word_to_int(parts[0])
         if count is None:
-            raise ValueError(f"Could not parse count from '{parts[0]}' in card description: {card_description}")
-    
+            raise ValueError(
+                f"Could not parse count from '{parts[0]}' in card description: {card_description}"
+            )
+
     color = parts[1]
-    shape = parts[2].rstrip('s')  # Remove plural 's'
-    
+    shape = parts[2].rstrip("s")  # Remove plural 's'
+
     # Map shape names to image.py format
     shape_map = {
-        'triangle': 'triangle',
-        'circle': 'circle', 
-        'star': 'star',
-        'cross': 'square'  # Map cross to square since we use square in image.py
+        "triangle": "triangle",
+        "circle": "circle",
+        "star": "star",
+        "cross": "square",  # Map cross to square since we use square in image.py
     }
-    
-    result = {
-        'shape': shape_map.get(shape, shape),
-        'color': color,
-        'count': count
-    }
-    
+
+    result = {"shape": shape_map.get(shape, shape), "color": color, "count": count}
+
     # Add background color if expected
     if bg_color and len(parts) > 3:
-        result['background'] = parts[3]
+        result["background"] = parts[3]
     elif bg_color:
         # Default background if not specified
-        result['background'] = 'white'
-    
+        result["background"] = "white"
+
     return result
+
 
 def find_matching_card(given_attrs, rule):
     """
     Find which of the 4 reference cards matches the given card based on the rule.
-    
+
     Args:
         given_attrs: dict with given card attributes
         rule: str, the matching rule ('color', 'shape', 'number', 'background')
-    
+
     Returns:
         int: The card number (1-4) that matches the rule
     """
     # Define the 4 reference cards (same as in image.py)
     reference_cards = [
-        {'shape': 'circle', 'color': 'red', 'count': 1, 'background': 'red'},      # Card 1
-        {'shape': 'triangle', 'color': 'green', 'count': 2, 'background': 'green'},  # Card 2
-        {'shape': 'star', 'color': 'blue', 'count': 3, 'background': 'blue'},       # Card 3
-        {'shape': 'square', 'color': 'yellow', 'count': 4, 'background': 'yellow'}    # Card 4
+        {"shape": "circle", "color": "red", "count": 1, "background": "red"},  # Card 1
+        {
+            "shape": "triangle",
+            "color": "green",
+            "count": 2,
+            "background": "green",
+        },  # Card 2
+        {"shape": "star", "color": "blue", "count": 3, "background": "blue"},  # Card 3
+        {
+            "shape": "square",
+            "color": "yellow",
+            "count": 4,
+            "background": "yellow",
+        },  # Card 4
     ]
 
     # Map rule names to attribute names
     rule_map = {
-        'color': 'color',
-        'shape': 'shape', 
-        'number': 'count',
-        'background': 'background'
+        "color": "color",
+        "shape": "shape",
+        "number": "count",
+        "background": "background",
     }
-    
+
     attribute = rule_map.get(rule, rule)
     given_value = given_attrs.get(attribute)
-    
+
     if given_value is None:
-        raise ValueError(f"Given card does not have attribute '{attribute}' for rule '{rule}'")
-    
+        raise ValueError(
+            f"Given card does not have attribute '{attribute}' for rule '{rule}'"
+        )
+
     for i, ref_card in enumerate(reference_cards):
         if ref_card[attribute] == given_value:
             return i + 1  # Return 1-based index
-    
+
     # Should not happen if cards are generated correctly
-    raise ValueError(f"No matching card found for rule '{rule}' with value '{given_value}'. Given card: {given_attrs}")  
+    raise ValueError(
+        f"No matching card found for rule '{rule}' with value '{given_value}'. Given card: {given_attrs}"
+    )
