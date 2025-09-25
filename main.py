@@ -213,6 +213,7 @@ Examples:
                 num_correct=args.num_correct,
                 repeats=args.repeats,
                 bg_color=args.bg_color,
+                ambiguous_mode=args.ambiguous,
                 few_shot=args.few_shot,
                 cot=args.cot,
                 hint=args.hint,

@@ -108,7 +108,9 @@ def run_wcst(
     variant="card",
     max_trials=64,
     num_correct=5,
+    bg_color=False,
     repeats=1,
+    ambiguous_mode="off",
     few_shot=False,
     cot=False,
     hint=False,
@@ -127,6 +129,7 @@ def run_wcst(
         max_trials: Maximum number of trials
         num_correct: Number of correct answers required per category
         repeats: Number of runs to perform
+        ambiguous_mode: Control ambiguity in card generation ("off", "first", "rest")
         few_shot: Whether to use few-shot prompting
         cot: Whether to use chain-of-thought reasoning
         hint: Whether to provide hints
@@ -213,7 +216,7 @@ def run_wcst(
 
     save = {}
     run_history = {}
-    run_reasoning = {}  # Add new dictionary for reasoning traces
+    run_reasoning = {}
 
     for rep in range(repeats):
         model_instance = None
@@ -229,11 +232,13 @@ def run_wcst(
         completed_cat = 0
         total_correct = 0
         correct_prefix = ""
+        force_ambig = False
 
         with tqdm(total=max_trials, desc="Total trials") as trial_bar:
             for _ in range(2):
                 for rule in rules:
                     correct_cnt = 0
+                    force_ambig = True if ambiguous_mode == "first" else False
 
                     with tqdm(
                         total=num_correct, desc=f"Correct answers for {rule}"
@@ -243,9 +248,23 @@ def run_wcst(
                                 break
 
                             if variant == "card":
-                                given, opt = wcst_generator(rule, False)
+                                if ambiguous_mode != "off":
+                                    given, opt = wcst_generator(rule, randomize=False, bg_color=bg_color, ambiguous=force_ambig)
+                                    if ambiguous_mode == "rest":  # After the first non-ambiguous trial, keep all subsequent trials ambiguous
+                                        force_ambig = True
+                                    else:  # Only the first trial is ambiguous
+                                        force_ambig = False
+                                else:
+                                    given, opt = wcst_generator(rule, randomize=False, bg_color=bg_color,)
                             elif variant == "card-random":
-                                given, opt = wcst_generator(rule, True)
+                                if ambiguous_mode != "off":
+                                    given, opt = wcst_generator(rule, True, ambiguous=force_ambig)
+                                    if ambiguous_mode == "rest":  # After the first non-ambiguous trial, keep all subsequent trials ambiguous
+                                        force_ambig = True
+                                    else:  # Only the first trial is ambiguous
+                                        force_ambig = False
+                                else:
+                                    given, opt = wcst_generator(rule, True)
                             elif variant == "string":
                                 given, opt = string_generator(rule)
 
@@ -318,6 +337,16 @@ def run_wcst(
                                     "model_ans": ans,
                                     "true_ans": chosen_idx,
                                 }
+                                
+                                # Add ambiguity information for card variants
+                                if variant in ["card", "card-random"] and ambiguous_mode != "off":
+                                    try:
+                                        save_row["ambiguous"] = check_rule_ambiguity(
+                                            given, opt[chosen_idx - 1], bg_color=bg_color
+                                        )
+                                    except:
+                                        save_row["ambiguous"] = None
+                                        
                                 save_rep.append(save_row)
 
                     if correct_cnt == num_correct:
@@ -329,9 +358,7 @@ def run_wcst(
 
         save[f"run_{rep+1}"] = save_rep
         run_history[f"run_{rep+1}"] = model_instance.history
-        run_reasoning[f"run_{rep+1}"] = (
-            model_instance.reasoning_trace
-        )  # Save reasoning trace
+        run_reasoning[f"run_{rep+1}"] = model_instance.reasoning_trace
 
         with open(save_path, "w") as f:
             json.dump(save, f, indent=4)
@@ -339,9 +366,7 @@ def run_wcst(
         with open(save_path.replace(".json", "_history.json"), "w") as f:
             json.dump(run_history, f, indent=4)
 
-        with open(
-            save_path.replace(".json", "_reasoning.json"), "w"
-        ) as f:  # Save reasoning traces
+        with open(save_path.replace(".json", "_reasoning.json"), "w") as f:
             json.dump(run_reasoning, f, indent=4)
 
 
