@@ -331,19 +331,24 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
     for token in tokens:
         legal_boxes[token] = [x for x in range(1, n_boxes + 1)]
 
-    worst_case_n = n_boxes**2
-    total_guess = 0
-    illegal_guess = 0
-    invalid_guess = 0
-    repeated_guess = 0
-    nobox_guess = 0
-    valid_guess = 0
+    run_stats = {
+        "worst_case_guesses": n_boxes**2,
+        "illegal": 0,
+        "guesses": 0,
+        "invalid": 0,
+        "repeated": 0,
+        "nobox": 0,
+        "valid": 0,
+        "finished_run": False,
+    }
 
     run_history = []
 
     # Start the test
     response = model.send_message(question, cot=cot)
-    with tqdm(total=worst_case_n, desc="Total guesses") as guess_bar:
+    if response is None:
+        return run_stats, run_history
+    with tqdm(total=run_stats["worst_case_guesses"], desc="Total guesses") as guess_bar:
         with tqdm(total=n_boxes * n_tokens, desc="Tokens") as token_bar:
             token_box = dict.fromkeys(tokens)
             for token in tokens:
@@ -354,6 +359,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
             while True:
                 for token in found_tokens:
                     if len(legal_boxes[token]) == 0:
+                        token_box[token] = None
                         continue
                     token_box[token] = random.choice(legal_boxes[token])
                     # tqdm.write(f"Token {token} put in box {token_box[token]}")
@@ -365,20 +371,20 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                 # End test
                 if all([len(legal) == 0 for legal in legal_boxes.values()]):
                     break
-                if total_guess >= worst_case_n:
+                if run_stats["guesses"] >= run_stats["worst_case_guesses"]:
                     break
 
                 opened_boxes = set()
                 found_tokens = []
                 found = False
                 while not found:
-                    total_guess += 1
+                    run_stats["guesses"] += 1
                     guess_bar.update(1)
 
                     with open("data/temp_history.json", "w") as f:
                         json.dump(model.history, f, indent=4)
 
-                    if total_guess >= worst_case_n:
+                    if run_stats["guesses"] >= run_stats["worst_case_guesses"]:
                         break
 
                     # Note-taking assistance
@@ -426,7 +432,11 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                                 truncate_history=True,
                                 cot=cot,
                             )
-                            invalid_guess += 1
+                            run_stats["invalid"] += 1
+
+                            if response is None:
+                                return run_stats, run_history
+                            
                             continue
                     else:
                         run_history.append(
@@ -447,25 +457,29 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                             truncate_history=True,
                             cot=cot,
                         )
-                        invalid_guess += 1
+                        run_stats["invalid"] += 1
+
+                        if response is None:
+                            return run_stats, run_history
+                        
                         continue
 
                     legal = False
-                    for legal in legal_boxes.values():
-                        if chosen_box in legal:
+                    for legal_list in legal_boxes.values():
+                        if chosen_box in legal_list:
                             legal = True
                             break
                     if not legal:
-                        illegal_guess += 1
+                        run_stats["illegal"] += 1
                     elif chosen_box in opened_boxes:
-                        repeated_guess += 1
+                        run_stats["repeated"] += 1
                     else:
-                        valid_guess += 1
+                        run_stats["valid"] += 1
 
                     opened_boxes.add(chosen_box)
 
                     for token in tokens:
-                        if chosen_box == token_box[token]:
+                        if token_box[token] is not None and chosen_box == token_box[token]:
                             found = True
                             token_bar.update(1)
                             legal_boxes[token].remove(chosen_box)
@@ -480,7 +494,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
 
                     run_history.append(
                         {
-                            "token_box": [token_box[t] for t in tokens],
+                            "token_box": [token_box[t] for t in tokens if token_box[t] is not None],
                             "chosen_box": chosen_box,
                             "found": found,
                             "status": "valid",
@@ -492,17 +506,11 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         msg + notes + question, truncate_history=True, cot=cot
                     )
                     model.history[-2]["content"] = msg  # Truncate user response length
+                    
+                    if response is None:
+                        return run_stats, run_history
 
-    run_stats = {
-        "worst_case_guesses": worst_case_n,
-        "illegal": illegal_guess,
-        "guesses": total_guess,
-        "invalid": invalid_guess,
-        "repeated": repeated_guess,
-        "nobox": nobox_guess,
-        "valid": valid_guess,
-    }
-
+    run_stats["finished_run"] = True
     return run_stats, run_history
 
 
