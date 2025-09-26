@@ -233,6 +233,7 @@ def run_wcst(
         total_correct = 0
         correct_prefix = ""
         force_ambig = False
+        early_termination = False
 
         with tqdm(total=max_trials, desc="Total trials") as trial_bar:
             for _ in range(2):
@@ -296,6 +297,11 @@ def run_wcst(
                                     truncate_history=True,
                                     cot=cot,
                                 )
+
+                                if response is None:
+                                    early_termination = True
+                                    break
+
                                 ans = re.search(r"<answer>(?s:.*)</answer>", response)
                                 if ans:
                                     ans = re.search(
@@ -349,8 +355,17 @@ def run_wcst(
                                         
                                 save_rep.append(save_row)
 
+                            if early_termination:
+                                break
+
                     if correct_cnt == num_correct:
                         completed_cat += 1
+                    
+                    if early_termination:
+                        break
+
+                if early_termination:
+                    break
 
         print(f"Completed categories: {completed_cat}")
         print(f"Total number of trials: {n_trials}")
@@ -494,6 +509,7 @@ def run_wcst_image(
         total_correct = 0
         correct_prefix = ""
         force_ambig = False
+        early_termination = False
 
         with tqdm(total=max_trials, desc="Total trials") as trial_bar:
             for _ in range(2):  # Twice per rule
@@ -558,6 +574,11 @@ def run_wcst_image(
                                     truncate_history=True,
                                     cot=cot,
                                 )
+
+                                if response is None:
+                                    early_termination = True
+                                    break
+
                                 ans = re.search(r"<answer>(?s:.*)</answer>", response)
                                 if ans:
                                     ans = re.search(
@@ -608,8 +629,17 @@ def run_wcst_image(
                                 }
                                 save_rep.append(save_row)
 
+                            if early_termination:
+                                break
+
                     if correct_cnt == num_correct:
                         completed_cat += 1
+                    
+                    if early_termination:
+                        break
+
+                if early_termination:
+                    break
 
         print(f"Completed categories: {completed_cat}")
         print(f"Total number of trials: {n_trials}")
