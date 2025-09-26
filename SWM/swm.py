@@ -26,9 +26,6 @@ def image_swm(
     note_assist=False,
     image_only=False,
 ):
-    if note_assist:
-        raise NotImplementedError
-
     # Initiate w/ task prompt
     task_prompt = f"""You will be performing the Spatial Working Memory task. 
 You will be given an image containing {n_boxes} yellow boxes in a grid. 
@@ -126,11 +123,13 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                             notes += f"Boxes that has contained token {token}: "
                             for box in range(1, n_boxes + 1):
                                 if box not in legal:
-                                    notes += f"{box}, "
+                                    box_coord = swm_gen.get_box_coord(box)
+                                    notes += f"{box_coord}, "
                             notes += "\n"
                         notes += f"Opened boxes: "
                         for box in opened_boxes:
-                            notes += f"{box}, "
+                            box_coord = swm_gen.get_box_coord(box)
+                            notes += f"{box_coord}, "
                         notes += "\n"
 
                     msg = ""
