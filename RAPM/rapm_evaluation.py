@@ -184,10 +184,32 @@ def run_text_rapm_evaluation(args):
     cat_correct = defaultdict(int)
     cat_total = defaultdict(int)
     reasoning_traces = []
+    failed_items = []  # track items where model failed to return a response
     for item in tqdm(items, desc="Processing text RAPM"):
         model.init_chat(system_prompt)
         prompt = format_text_item_prompt(item, args.answer_mode)
         resp = model.send_message(prompt, cot=args.cot, truncate_history=True)
+        if resp is None:
+            # Record failure and continue without crashing
+            failed_items.append(item["id"])
+            results.append(
+                {
+                    "id": item["id"],
+                    "predicted_answer": None,
+                    "correct_index": item.get("correct_index"),
+                    **({} if args.answer_mode == "mc" else {"matches_gold": False, "constraint_valid": False}),
+                    "is_correct": False,
+                    "response": None,
+                    "categories": item["raw"].get("credited_categories")
+                    or item["raw"].get("assigned_categories")
+                    or ([item["raw"].get("primary_category")] if item["raw"].get("primary_category") else []),
+                    "failure_reason": "no_response",
+                }
+            )
+            continue
+        # NOTE: If failures correlate with very long outputs, consider lowering max_new_tokens
+        # adaptively (e.g., halve after a None) or trimming the prompt. Placeholder left here
+        # for a future adaptive token budget feature.
         m = re.search(r"<answer>(.*?)</answer>", resp, re.DOTALL)
         predicted = None
         is_correct = False
@@ -250,6 +272,8 @@ def run_text_rapm_evaluation(args):
     print("\n=== RAPM TEXT RESULTS ===")
     print(f"Model: {args.model}")
     print(f"Overall accuracy: {overall_acc:.3f} ({total_correct}/{total})")
+    if failed_items:
+        print(f"Failed items (no response) : {len(failed_items)} -> {failed_items[:10]}{'...' if len(failed_items) > 10 else ''}")
     if cat_total:
         for c in sorted(cat_total):
             acc = cat_correct[c] / cat_total[c] if cat_total[c] else 0
@@ -269,6 +293,7 @@ def run_text_rapm_evaluation(args):
             }
             for c in cat_total
         },
+        "failed_items": failed_items,
         "args": vars(args),
     }
     return results, summary, [], reasoning_traces
