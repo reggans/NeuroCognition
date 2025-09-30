@@ -1,5 +1,6 @@
 import os
 import json
+import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
@@ -90,23 +91,34 @@ def get_setup_type(filename):
     """Get the setup type from filename"""
     if "card-random" in filename:
         return "card-random"
-    elif "card" in filename:
-        return "card"
     elif "string" in filename:
         return "string"
-    return None
+    else:
+        return "card"
 
 
-def analyze_results():
-    data_dir = Path("./WCST/data/text")
+def analyze_results(data_type: str = "image"):
+    """Analyze WCST results.
+
+    Parameters
+    ----------
+    data_type : str
+        Either 'image' or 'text'. Determines which subdirectory under WCST/data/ to read.
+    """
+    if data_type not in {"image", "text"}:
+        raise ValueError("data_type must be 'image' or 'text'")
+
+    data_dir = Path(f"./WCST/data/{data_type}")
     if not data_dir.exists():
-        raise FileNotFoundError("WCST data directory not found")
+        raise FileNotFoundError(f"WCST data directory not found: {data_dir}")
 
     # Dictionary to store results by setup type and category
+    # Base categories always tracked; additional dynamic categories will be added on demand
+    base_categories = ["non_cot", "cot", "few_shot", "few_shot_cot"]
     results = {
-        "card": {"non_cot": {}, "cot": {}, "few_shot": {}, "few_shot_cot": {}},
-        "card-random": {"non_cot": {}, "cot": {}, "few_shot": {}, "few_shot_cot": {}},
-        "string": {"non_cot": {}, "cot": {}, "few_shot": {}, "few_shot_cot": {}},
+        "card": {c: {} for c in base_categories},
+        "card-random": {c: {} for c in base_categories},
+        "string": {c: {} for c in base_categories},
     }
 
     # Process files
@@ -129,17 +141,40 @@ def analyze_results():
             if not setup_type:
                 continue
 
-            is_cot = "_cot" in stats_file.stem
-            is_few_shot = "_few_shot" in stats_file.stem
+            stem = stats_file.stem
+            is_cot = "_cot" in stem or stem.endswith("cot")
+            is_few_shot = "_few_shot" in stem
+
+            # Detect background mode variants (appear after e.g. image_ )
+            background_mode = None
+            # We look for patterns _bg_first, _off, _rest OR image_bg_first / image_off / image_rest
+            if any(key in stem for key in ["bg_first", "_off", "_rest"]):
+                if "bg_first" in stem:
+                    background_mode = "bg_first"
+                elif "_off" in stem:
+                    background_mode = "off"
+                elif "_rest" in stem:
+                    background_mode = "rest"
 
             if is_few_shot and is_cot:
-                category = "few_shot_cot"
+                if background_mode:
+                    category = f"few_shot_cot_{background_mode}"
+                else:
+                    category = "few_shot_cot"
             elif is_few_shot:
+                # Keep existing behaviour (no background variant requested by user for plain few_shot)
                 category = "few_shot"
             elif is_cot:
-                category = "cot"
+                if background_mode:
+                    category = f"cot_{background_mode}"
+                else:
+                    category = "cot"
             else:
                 category = "non_cot"
+
+            # Dynamically add new category containers if needed
+            if category not in results[setup_type]:
+                results[setup_type][category] = {}
 
             print(f"  Processing {setup_type} file: {stats_file.name}")
 
@@ -188,7 +223,7 @@ def analyze_results():
     # Calculate statistics and generate plots for each setup type
     for setup_type in results:
         # Calculate final statistics for each metric
-        for category in results[setup_type]:
+        for category in list(results[setup_type].keys()):
             for model_name in list(results[setup_type][category].keys()):
                 model_data = results[setup_type][category][model_name]
                 metrics = [k for k in model_data if k != "n_files"]
@@ -214,18 +249,25 @@ def analyze_results():
                     del results[setup_type][category][model_name]
 
         # Create figure with 2 subplots: accuracy and perserverative_error
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 12))
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 12))
 
         all_models = set()
-        for category in results[setup_type].values():
-            all_models.update(category.keys())
+        for category_dict in results[setup_type].values():
+            all_models.update(category_dict.keys())
         all_models = sorted(list(all_models))
 
+        # Determine categories to plot: keep base order, then any dynamic extensions sorted
+        dynamic_categories = [c for c in results[setup_type].keys() if c not in base_categories]
+        # Stable sort for reproducibility
+        dynamic_categories = sorted(dynamic_categories)
+        categories_to_plot = base_categories + dynamic_categories
+
         x = np.arange(len(all_models))
-        width = 0.2
+        n_cat = len(categories_to_plot)
+        width = min(0.8 / max(n_cat, 1), 0.18)  # keep bars from overlapping
 
         # Plot accuracy (top subplot)
-        for i, category in enumerate(["non_cot", "cot", "few_shot", "few_shot_cot"]):
+        for i, category in enumerate(categories_to_plot):
             accuracies = []
             min_accuracies = []
             max_accuracies = []
@@ -247,8 +289,9 @@ def analyze_results():
                 ]
             )
 
+            offset = (i - (n_cat - 1) / 2) * width
             bars = ax1.bar(
-                x + (i - 1.5) * width,
+                x + offset,
                 accuracies,
                 width,
                 yerr=yerr,
@@ -274,9 +317,8 @@ def analyze_results():
         ax1.set_xticks(x)
         ax1.set_xticklabels(all_models, rotation=45, ha="right")
         ax1.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
-
         # Plot perserverative_error (bottom subplot)
-        for i, category in enumerate(["non_cot", "cot", "few_shot", "few_shot_cot"]):
+        for i, category in enumerate(categories_to_plot):
             errors = []
             min_errors = []
             max_errors = []
@@ -298,8 +340,9 @@ def analyze_results():
                 ]
             )
 
+            offset = (i - (n_cat - 1) / 2) * width
             bars = ax2.bar(
-                x + (i - 1.5) * width,
+                x + offset,
                 errors,
                 width,
                 yerr=yerr,
@@ -343,17 +386,24 @@ def analyze_results():
 
 
 if __name__ == "__main__":
-    results = analyze_results()
-    # Print summary
-    print("\nWCST Analysis Results:")
-    for setup_type in ["card"]:
-        print(f"\n{setup_type.upper()}:")
-        for category in ["non_cot", "cot"]:
-            print(f"\n{category.upper()}:")
-            for model, stats in results[setup_type][category].items():
-                print(f"\n{model}:")
-                for metric, value in stats.items():
-                    if isinstance(value, float):
-                        print(f"  {metric}: {value:.4f}")
-                    else:
-                        print(f"  {metric}: {value}")
+    parser = argparse.ArgumentParser(description="Analyze WCST results.")
+    parser.add_argument(
+        "--data-type",
+        dest="data_type",
+        choices=["image", "text"],
+        default="image",
+        help="Dataset type directory under WCST/data/ (default: image)",
+    )
+    args = parser.parse_args()
+    results = analyze_results(args.data_type)
+    # Print compact summary for all categories present (limit to card setup for brevity)
+    print("\nWCST Analysis Results (setup=card):")
+    for category in results["card"].keys():
+        print(f"\nCategory: {category}")
+        for model, stats in results["card"][category].items():
+            print(f"  Model: {model}")
+            for metric, value in stats.items():
+                if isinstance(value, float):
+                    print(f"    {metric}: {value:.4f}")
+                else:
+                    print(f"    {metric}: {value}")
