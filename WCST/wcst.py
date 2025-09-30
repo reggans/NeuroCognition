@@ -190,10 +190,14 @@ def run_wcst(
 
     if variant == "card":
         system_prompt = wcst_prompt
-        rules = ["color", "shape", "number", "background"]
+        rules = ["color", "shape", "number"]
+        if bg_color:
+            rules.append("background")
     elif variant == "card-random":
         system_prompt = wcst_random_prompt
-        rules = ["color", "shape", "number", "background"]
+        rules = ["color", "shape", "number"]
+        if bg_color:
+            rules.append("background")
     elif variant == "string":
         system_prompt = random_prompt
         rules = ["length", "vowels", "consonants"]
