@@ -147,7 +147,7 @@ def run_wcst(
         "WCST",
         "data",
         "text",
-        f"{model_source}_{model.replace('/', '-')}_{variant}_{max_trials}-{num_correct}.json",
+        f"{model_source}_{model.replace('/', '-')}_{variant}_{max_trials}-{num_correct}{'-bg' if bg_color else ''}_{ambiguous_mode}_{'hint' if hint else ''}.json",
     )
 
     if few_shot and cot:
