@@ -6,6 +6,9 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 
+CATEGORY_ORDER = ["non_cot", "non_cot-notes", "cot", "cot-notes"]
+
+
 def load_run_stats(stats_file):
     """Load run statistics from a JSON file"""
     with open(stats_file, "r") as f:
@@ -68,12 +71,37 @@ def count_tokens_found_structured(structured_entries):
     if not isinstance(structured_entries, list):
         return 0, []
 
+    total_found = 0
     matches = []
-    for entry in structured_entries:
-        if isinstance(entry, dict) and entry.get("found") is True:
-            matches.append(entry)
 
-    return len(matches), matches
+    for entry in structured_entries:
+        if not isinstance(entry, dict) or entry.get("found") is not True:
+            continue
+
+        chosen_coord = entry.get("chosen_coord")
+        chosen_tuple = tuple(chosen_coord) if isinstance(chosen_coord, list) else None
+        token_box = entry.get("token_box")
+
+        tokens_found_here = 0
+        if chosen_tuple is not None and isinstance(token_box, list):
+            for coord in token_box:
+                if isinstance(coord, list) and tuple(coord) == chosen_tuple:
+                    tokens_found_here += 1
+
+        if tokens_found_here <= 0:
+            # Fallback: if metadata is incomplete, assume exactly one token was found
+            tokens_found_here = 1
+
+        total_found += tokens_found_here
+        matches.append(
+            {
+                "chosen_coord": chosen_coord,
+                "token_box": token_box,
+                "tokens_found_here": tokens_found_here,
+            }
+        )
+
+    return total_found, matches
 
 
 def _flatten_model_stats(model_stats):
@@ -136,7 +164,7 @@ def analyze_results():
 
     # Dictionary to store results per source, setup, and cot/non-cot
     results = {
-        source: {"cot": {}, "non_cot": {}} for source, _ in data_sources
+        source: {category: {} for category in CATEGORY_ORDER} for source, _ in data_sources
     }
 
     # Process all run_stats.json files grouped by source
@@ -154,7 +182,12 @@ def analyze_results():
             if not total_needed_tokens:
                 continue
 
-            category = "cot" if is_cot else "non_cot"
+            is_notes = "_notes" in stats_file.stem
+            base_category = "cot" if is_cot else "non_cot"
+            category = f"{base_category}-notes" if is_notes else base_category
+
+            if category not in results[source]:
+                results[source][category] = {}
             if setup not in results[source][category]:
                 results[source][category][setup] = {}
 
@@ -189,18 +222,15 @@ def analyze_results():
                 try:
                     run_tokens_found = None
                     token_matches = []
-                    history_source_name = None
                     used_structured = False
 
                     if structured_data and run_name in structured_data:
                         run_tokens_found, token_matches = count_tokens_found_structured(
                             structured_data[run_name]
                         )
-                        history_source_name = structured_file.name
                         used_structured = True
                     elif history_data and run_name in history_data:
                         run_tokens_found, token_matches = count_tokens_found(history_data[run_name])
-                        history_source_name = history_file.name
                     else:
                         missing_sources = []
                         if structured_data is not None:
@@ -358,23 +388,29 @@ def analyze_results():
             setups.update(category.keys())
 
         for setup in sorted(setups):
+            plot_categories = [
+                category for category in CATEGORY_ORDER if setup in source_results.get(category, {})
+            ]
+            if not plot_categories:
+                continue
+
             plt.figure(figsize=(12, 6))
 
             all_models = set()
-            for category in ["non_cot", "cot"]:
-                if setup in source_results[category]:
+            for category in plot_categories:
+                if setup in source_results.get(category, {}):
                     all_models.update(source_results[category][setup].keys())
             all_models = sorted(list(all_models))
 
             x = np.arange(len(all_models))
-            width = 0.35
+            width = 0.8 / max(len(plot_categories), 1)
 
-            for i, category in enumerate(["non_cot", "cot"]):
+            for i, category in enumerate(plot_categories):
                 scores = []
                 min_scores = []
                 max_scores = []
                 for model in all_models:
-                    if setup in source_results[category] and model in source_results[category][setup]:
+                    if setup in source_results.get(category, {}) and model in source_results[category][setup]:
                         model_data = source_results[category][setup][model]
                         scores.append(model_data["avg_score"])
                         min_scores.append(model_data["min_score"])
@@ -392,11 +428,11 @@ def analyze_results():
                 )
 
                 bars = plt.bar(
-                    x + (i - 0.5) * width,
+                    x + (i - (len(plot_categories) - 1) / 2) * width,
                     scores,
                     width,
                     yerr=yerr,
-                    label=category.replace("_", " ").title(),
+                    label=category.replace("_", " ").replace("-", " ").title(),
                 )
 
                 for idx, rect in enumerate(bars):
@@ -427,7 +463,7 @@ def analyze_results():
     csv_root.mkdir(parents=True, exist_ok=True)
     for source, source_results in results.items():
         rows = []
-        for category in ["non_cot", "cot"]:
+        for category in CATEGORY_ORDER:
             setups = source_results.get(category, {})
             for setup, models in setups.items():
                 for model_name, model_stats in models.items():
@@ -468,10 +504,11 @@ if __name__ == "__main__":
     print("\nAnalysis Results:")
     for source in results:
         print(f"\n=== SOURCE: {source.upper()} ===")
-        for category in ["non_cot", "cot"]:
+        for category in CATEGORY_ORDER:
             if not results[source][category]:
                 continue
-            print(f"\n{category.upper()}:")
+            printable_category = category.replace("_", " ").replace("-", " ").upper()
+            print(f"\n{printable_category}:")
             for setup, models in results[source][category].items():
                 print(f"\nSetup {setup}:")
                 for model, stats in models.items():
