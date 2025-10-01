@@ -109,6 +109,7 @@ class ModelWrapper:
         think_budget=256,
         image_input=False,
         image_path=None,
+        n_retry: int = 2,
     ):
         if image_input:
             if image_path is None:
@@ -126,6 +127,8 @@ class ModelWrapper:
         self.image_input = image_input
         self.image_path = image_path
         self.reasoning_trace = []  # Add new private attribute
+        # Max number of retry attempts for a failed API call (total attempts = n_retry + 1)
+        self.n_retry = max(0, n_retry)
 
         if model_source in ["openai", "openrouter", "vllm"]:
             if model_source == "vllm":
@@ -147,11 +150,27 @@ class ModelWrapper:
                             "Please set the OPENROUTER_API_KEY environment variable for OpenRouter or pass it to the CLI."
                         )
                 base_url = "https://openrouter.ai/api/v1"
+                # OpenRouter recommends sending HTTP-Referer and X-Title headers, especially for free-tier models
+                self._openrouter_headers = {}
+                ref = os.getenv("OPENROUTER_REF", "")
+                title = os.getenv("OPENROUTER_TITLE", "CognitiveEval")
+                if ref:
+                    self._openrouter_headers["HTTP-Referer"] = ref
+                if title:
+                    self._openrouter_headers["X-Title"] = title
 
-            self.client = openai.OpenAI(
-                api_key=api_key,
-                base_url=base_url,
-            )
+            # Build OpenAI client with optional default headers and a slightly larger timeout for OpenRouter
+            client_kwargs = {
+                "api_key": api_key,
+                "base_url": base_url,
+            }
+            # Attach default headers if using OpenRouter
+            if model_source == "openrouter":
+                if getattr(self, "_openrouter_headers", None):
+                    client_kwargs["default_headers"] = self._openrouter_headers  # type: ignore
+                # Increase timeout to accommodate longer generations
+                client_kwargs["timeout"] = float(os.getenv("OPENROUTER_TIMEOUT", "180"))  # type: ignore
+            self.client = openai.OpenAI(**client_kwargs)
         else:
             raise ValueError(
                 "Unsupported model source. Supported sources are: openai, openrouter, vllm."
@@ -164,7 +183,16 @@ class ModelWrapper:
         self.reasoning_trace = []  # Reset reasoning trace when starting new chat
 
     def send_message(
-        self, message, max_new_tokens=None, truncate_history=False, cot=False, image_only=False,
+        self,
+        message,
+        max_new_tokens=None,
+        truncate_history=False,
+        cot=False,
+        image_only=False,
+        stream: bool = False,
+        allow_partial_on_error: bool = True,
+        continue_on_truncation: bool = False,
+        max_continuations: int = 0,
     ):
         if not validate_message_turns(self.history):
             raise ValueError(
@@ -211,66 +239,158 @@ class ModelWrapper:
                     extra_body["reasoning"]["enabled"] = True
             else:
                 extra_body = {"reasoning": {"enabled": False}}
-        if self.model_source == "openai":
+        
+        # Metadata placeholders
+        self.last_finish_reason = None
+        self.last_truncated = False
+
+        # Unified retry logic with optional streaming
+        attempts = self.n_retry + 1  # total attempts including first try
+        partial_buffer = ""
+        for attempt in range(1, attempts + 1):
             try:
-                raw_resp = self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=self.history,
-                    max_completion_tokens=max_new_tokens or self.max_new_tokens,
-                    extra_body=extra_body,
-                )
-                raw_response = raw_resp.choices[0].message.content
-            except:
-                time.sleep(5)
-                try:
-                    raw_resp = self.client.chat.completions.create(
-                        model=self.model_name,
-                        messages=self.history,
-                        max_completion_tokens=max_new_tokens or self.max_new_tokens,
-                        extra_body=extra_body,
-                    )
-                    raw_response = raw_resp.choices[0].message.content
-                except Exception as e:
-                    print(f"OpenAI API error after retry: {e}")
-                    return None
-        else:
-            try:
-                raw_resp = self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=self.history,
-                    max_tokens=max_new_tokens or self.max_new_tokens,
-                    temperature=0.0,
-                    # top_p=0.95,
-                    extra_body=extra_body,
-                )
-                if raw_resp.choices[0].finish_reason == "error":
-                    print(raw_resp)
-                    print(
-                        f"Model returned error: {raw_resp.choices[0].message.content}"
-                    )
-                raw_response = raw_resp.choices[0].message.content
-                raw_reasoning = raw_resp.choices[0].message.reasoning
-            except:
-                time.sleep(5)
-                try:
-                    raw_resp = self.client.chat.completions.create(
-                        model=self.model_name,
-                        messages=self.history,
-                        max_tokens=max_new_tokens or self.max_new_tokens,
-                        temperature=0.0,
-                        # top_p=0.95,
-                        extra_body=extra_body,
-                    )
-                    if raw_resp.choices[0].finish_reason == "error":
-                        print(raw_resp)
-                        print(
-                            f"Model returned error: {raw_resp.choices[0].message.content}"
+                if self.model_source == "openai":
+                    if stream:
+                        stream_resp = self.client.chat.completions.create(
+                            model=self.model_name,
+                            messages=self.history,
+                            max_completion_tokens=max_new_tokens or self.max_new_tokens,
+                            extra_body=extra_body,
+                            stream=True,
                         )
-                    raw_response = raw_resp.choices[0].message.content
-                    raw_reasoning = raw_resp.choices[0].message.reasoning
-                except Exception as e:
-                    print(f"API error after retry: {e}")
+                        for chunk in stream_resp:  # type: ignore
+                            try:
+                                delta = chunk.choices[0].delta
+                                if hasattr(delta, "content") and delta.content:
+                                    partial_buffer += delta.content
+                            except Exception:
+                                pass
+                            fr = getattr(chunk.choices[0], "finish_reason", None)
+                            if fr:
+                                self.last_finish_reason = fr
+                        raw_response = partial_buffer
+                        raw_reasoning = None
+                    else:
+                        raw_resp = self.client.chat.completions.create(
+                            model=self.model_name,
+                            messages=self.history,
+                            max_completion_tokens=max_new_tokens or self.max_new_tokens,
+                            extra_body=extra_body,
+                        )
+                        raw_response = raw_resp.choices[0].message.content
+                        self.last_finish_reason = getattr(raw_resp.choices[0], "finish_reason", None)
+                        raw_reasoning = getattr(raw_resp.choices[0].message, "reasoning", None)
+                else:  # openrouter or vllm
+                    if stream:
+                        stream_resp = self.client.chat.completions.create(
+                            model=self.model_name,
+                            messages=self.history,
+                            max_tokens=max_new_tokens or self.max_new_tokens,
+                            temperature=0.0,
+                            extra_body=extra_body,
+                            stream=True,
+                        )
+                        for chunk in stream_resp:  # type: ignore
+                            try:
+                                # Prefer OpenAI-compatible delta structure
+                                delta = getattr(chunk.choices[0], "delta", None)
+                                text = None
+                                if delta is not None and hasattr(delta, "content"):
+                                    text = delta.content
+                                # Some servers might stream message.content directly
+                                if not text:
+                                    msg = getattr(chunk.choices[0], "message", None)
+                                    if msg is not None and hasattr(msg, "content"):
+                                        text = msg.content
+                                if text:
+                                    partial_buffer += text
+                            except Exception:
+                                pass
+                            fr = getattr(chunk.choices[0], "finish_reason", None)
+                            if fr:
+                                self.last_finish_reason = fr
+                        raw_response = partial_buffer
+                        raw_reasoning = None
+                    else:
+                        raw_resp = self.client.chat.completions.create(
+                            model=self.model_name,
+                            messages=self.history,
+                            max_tokens=max_new_tokens or self.max_new_tokens,
+                            temperature=0.0,
+                            # top_p=0.95,
+                            extra_body=extra_body,
+                        )
+                        fr = getattr(raw_resp.choices[0], "finish_reason", None)
+                        self.last_finish_reason = fr
+                        if fr == "error":
+                            print(
+                                f"Model returned error: {raw_resp.choices[0].message.content}"
+                            )
+                        raw_response = raw_resp.choices[0].message.content
+                        raw_reasoning = getattr(raw_resp.choices[0].message, "reasoning", None)
+
+                # Detect truncation by finish_reason
+                if self.last_finish_reason in {"length", "max_tokens"}:
+                    self.last_truncated = True
+                break  # success
+            except Exception as e:
+                if stream and allow_partial_on_error and partial_buffer:
+                    print(f"Streaming error, returning partial after attempt {attempt}: {e}")
+                    raw_response = partial_buffer
+                    raw_reasoning = None
+                    break
+                if attempt == attempts:
+                    source = "OpenAI" if self.model_source == "openai" else "API"
+                    print(f"{source} error after {attempt} attempts: {e}")
+                    if allow_partial_on_error and partial_buffer:
+                        print("Returning partial buffer instead of None.")
+                        raw_response = partial_buffer
+                        raw_reasoning = None
+                        break
                     return None
+                # Backoff: smaller for openai (keep original 5s), larger for others (original 60s)
+                sleep_time = 5 if self.model_source == "openai" else 60
+                time.sleep(sleep_time)
+                continue
+
+        # Optionally attempt continuation calls if truncated and allowed
+        continuation_count = 0
+        while (
+            continue_on_truncation
+            and self.last_truncated
+            and continuation_count < max_continuations
+            and raw_response is not None
+        ):
+            continuation_count += 1
+            # Append a simple continuation instruction; could be configurable
+            self.history.append({"role": "assistant", "content": raw_response})
+            self.history.append(
+                {
+                    "role": "user",
+                    "content": "Continue the previous answer. Only continue; do not repeat earlier text.",
+                }
+            )
+            try:
+                cont_resp = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=self.history,
+                    **(
+                        {"max_completion_tokens": max_new_tokens or self.max_new_tokens}
+                        if self.model_source == "openai"
+                        else {"max_tokens": max_new_tokens or self.max_new_tokens, "temperature": 0.0}
+                    ),
+                )
+                cont_text = cont_resp.choices[0].message.content
+                fr = getattr(cont_resp.choices[0], "finish_reason", None)
+                self.last_finish_reason = fr
+                if fr in {"length", "max_tokens"}:
+                    self.last_truncated = True
+                else:
+                    self.last_truncated = False
+                raw_response += cont_text if cont_text else ""
+            except Exception as e:
+                print(f"Continuation attempt {continuation_count} failed: {e}")
+                break
 
         # Add this code after getting raw_response but before updating history
         if cot:
