@@ -1,4 +1,5 @@
 import os
+import csv
 import json
 import argparse
 import numpy as np
@@ -87,6 +88,18 @@ def complete_score(data):
     return scores
 
 
+def _flatten_metrics(metrics_dict):
+    """Flatten a nested metrics dictionary for CSV export."""
+    flat = {}
+    for key, value in metrics_dict.items():
+        if isinstance(value, dict):
+            for sub_key, sub_value in value.items():
+                flat[f"{key}_{sub_key}"] = sub_value
+        else:
+            flat[key] = value
+    return flat
+
+
 def get_setup_type(filename):
     """Get the setup type from filename"""
     if "card-random" in filename:
@@ -147,14 +160,14 @@ def analyze_results(data_type: str = "image"):
 
             # Detect background mode variants (appear after e.g. image_ )
             background_mode = None
-            # We look for patterns _bg_first, _off, _rest OR image_bg_first / image_off / image_rest
-            if any(key in stem for key in ["bg_first", "_off", "_rest"]):
+            # We look for patterns _bg_first, _bg_off, _bg_rest OR image_bg_first / image_bg_off / image_bg_rest
+            if any(key in stem for key in ["bg_first", "bg_off", "bg_rest"]):
                 if "bg_first" in stem:
                     background_mode = "bg_first"
-                elif "_off" in stem:
-                    background_mode = "off"
-                elif "_rest" in stem:
-                    background_mode = "rest"
+                elif "bg_off" in stem:
+                    background_mode = "bg_off"
+                elif "bg_rest" in stem:
+                    background_mode = "bg_rest"
 
             if is_few_shot and is_cot:
                 if background_mode:
@@ -377,6 +390,38 @@ def analyze_results(data_type: str = "image"):
             f"WCST/data/plots/wcst_analysis_{setup_type}.png", bbox_inches="tight"
         )
         plt.close()
+
+    # Export CSV summaries per setup type
+    csv_root = Path("./WCST/data/csv") / data_type
+    csv_root.mkdir(parents=True, exist_ok=True)
+    for setup_type, categories in results.items():
+        rows = []
+        for category, models in categories.items():
+            for model_name, stats in models.items():
+                row = {
+                    "data_type": data_type,
+                    "setup_type": setup_type,
+                    "category": category,
+                    "model": model_name,
+                }
+                row.update(_flatten_metrics(stats))
+                rows.append(row)
+
+        if not rows:
+            continue
+
+        fieldnames = ["data_type", "setup_type", "category", "model"]
+        extra_fields = sorted(
+            {key for row in rows for key in row.keys() if key not in fieldnames}
+        )
+        fieldnames.extend(extra_fields)
+
+        csv_path = csv_root / f"wcst_summary_{setup_type}.csv"
+        with open(csv_path, "w", newline="") as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(row)
 
     # Save summary statistics
     with open("WCST/data/wcst_summary.json", "w") as f:
