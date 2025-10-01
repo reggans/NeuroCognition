@@ -63,6 +63,19 @@ def count_tokens_found(history_entries):
     return len(matches), matches
 
 
+def count_tokens_found_structured(structured_entries):
+    """Count tokens found from structured history entries"""
+    if not isinstance(structured_entries, list):
+        return 0, []
+
+    matches = []
+    for entry in structured_entries:
+        if isinstance(entry, dict) and entry.get("found") is True:
+            matches.append(entry)
+
+    return len(matches), matches
+
+
 def _flatten_model_stats(model_stats):
     """Flatten nested metric dictionaries into a single-level mapping"""
     flat = {}
@@ -148,8 +161,17 @@ def analyze_results():
             stats = load_run_stats(stats_file)
             history_file = stats_file.with_name(stats_file.name.replace("run_stats", "run_history"))
             history_data = load_run_history(history_file)
-            if history_data is None:
-                print(f"Warning: history file missing for {stats_file.name}. Skipping.")
+
+            structured_file = stats_file.with_name(
+                stats_file.name.replace("run_stats", "run_structured_history")
+            )
+            structured_data = load_run_history(structured_file)
+
+            if history_data is None and structured_data is None:
+                print(
+                    "Warning: no history or structured history file found for "
+                    f"{stats_file.name}. Skipping."
+                )
                 continue
 
             # Gather all stats for aggregation
@@ -165,21 +187,51 @@ def analyze_results():
 
             for run_name, run in stats.items():
                 try:
-                    has_history = history_data and run_name in history_data
-                    if has_history:
+                    run_tokens_found = None
+                    token_matches = []
+                    history_source_name = None
+                    used_structured = False
+
+                    if structured_data and run_name in structured_data:
+                        run_tokens_found, token_matches = count_tokens_found_structured(
+                            structured_data[run_name]
+                        )
+                        history_source_name = structured_file.name
+                        used_structured = True
+                    elif history_data and run_name in history_data:
                         run_tokens_found, token_matches = count_tokens_found(history_data[run_name])
+                        history_source_name = history_file.name
                     else:
+                        missing_sources = []
+                        if structured_data is not None:
+                            missing_sources.append(structured_file.name)
+                        if history_data is not None:
+                            missing_sources.append(history_file.name)
+                        missing_desc = ", ".join(missing_sources) if missing_sources else "history files"
                         print(
-                            f"Warning: history missing for run '{run_name}' in {history_file.name}. Skipping run."
+                            "Warning: run '"
+                            f"{run_name}' not present in {missing_desc}. Skipping run."
                         )
                         continue
 
                     if run_tokens_found > total_needed_tokens:
-                        match_text = "\n".join(token_matches) if token_matches else "<no matches captured>"
+                        if used_structured:
+                            match_text = (
+                                "\n".join(json.dumps(match, ensure_ascii=False) for match in token_matches)
+                                if token_matches
+                                else "<no matches captured>"
+                            )
+                        else:
+                            match_text = "\n".join(token_matches) if token_matches else "<no matches captured>"
+
                         error_msg = (
                             "Token detection error: found more tokens than expected.\n"
                             f"  Source stats file: {stats_file}\n"
                             f"  Source history file: {history_file}\n"
+                        )
+                        if structured_data is not None:
+                            error_msg += f"  Source structured history file: {structured_file}\n"
+                        error_msg += (
                             f"  Run: {run_name}\n"
                             f"  Tokens required: {total_needed_tokens}\n"
                             f"  Tokens detected: {run_tokens_found}\n"
@@ -201,7 +253,7 @@ def analyze_results():
 
                     if guesses_value != worst_case:
                         finished_run = run.get("finished_run")
-                        tokens_incomplete = has_history and (tokens_score < 1.0)
+                        tokens_incomplete = (run_tokens_found is not None) and (tokens_score < 1.0)
                         if (finished_run is False) or tokens_incomplete:
                             diff = worst_case - guesses_value
                             if diff > 0:
