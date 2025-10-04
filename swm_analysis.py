@@ -7,7 +7,26 @@ from pathlib import Path
 
 
 CATEGORY_ORDER = ["non_cot", "non_cot-notes", "cot", "cot-notes"]
+OUTPUT_ROOT = Path("./SWM/data")
 
+
+
+def _normalize_selection(value):
+    """Normalize various coordinate/box representations into a comparable form."""
+    if isinstance(value, dict):
+        if {"row", "col"}.issubset(value.keys()):
+            return (value["row"], value["col"])
+        if {"x", "y"}.issubset(value.keys()):
+            return (value["x"], value["y"])
+        # Fallback: sort key/value pairs for stability
+        return tuple((k, _normalize_selection(v)) for k, v in sorted(value.items()))
+    if isinstance(value, list):
+        if len(value) == 1:
+            return _normalize_selection(value[0])
+        if all(isinstance(v, (int, float, str)) for v in value):
+            return tuple(value)
+        return tuple(_normalize_selection(v) for v in value)
+    return value
 
 def load_run_stats(stats_file):
     """Load run statistics from a JSON file"""
@@ -78,14 +97,17 @@ def count_tokens_found_structured(structured_entries):
         if not isinstance(entry, dict) or entry.get("found") is not True:
             continue
 
-        chosen_coord = entry.get("chosen_coord")
-        chosen_tuple = tuple(chosen_coord) if isinstance(chosen_coord, list) else None
+        chosen = None
+        if entry.get("chosen_box") is not None:
+            chosen = _normalize_selection(entry["chosen_box"])
+        elif entry.get("chosen_coord") is not None:
+            chosen = _normalize_selection(entry["chosen_coord"])
         token_box = entry.get("token_box")
 
         tokens_found_here = 0
-        if chosen_tuple is not None and isinstance(token_box, list):
+        if chosen is not None and isinstance(token_box, list):
             for coord in token_box:
-                if isinstance(coord, list) and tuple(coord) == chosen_tuple:
+                if _normalize_selection(coord) == chosen:
                     tokens_found_here += 1
 
         if tokens_found_here <= 0:
@@ -95,7 +117,8 @@ def count_tokens_found_structured(structured_entries):
         total_found += tokens_found_here
         matches.append(
             {
-                "chosen_coord": chosen_coord,
+                "chosen_box": entry.get("chosen_box"),
+                "chosen_coord": entry.get("chosen_coord"),
                 "token_box": token_box,
                 "tokens_found_here": tokens_found_here,
             }
@@ -162,6 +185,8 @@ def analyze_results():
     if not data_sources:
         raise FileNotFoundError("Data directories not found")
 
+    OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+
     # Dictionary to store results per source, setup, and cot/non-cot
     results = {
         source: {category: {} for category in CATEGORY_ORDER} for source, _ in data_sources
@@ -206,8 +231,6 @@ def analyze_results():
                     f"{stats_file.name}. Skipping."
                 )
                 continue
-
-            # Gather all stats for aggregation
             scores = []
             guesses = []
             illegal = []
@@ -453,13 +476,13 @@ def analyze_results():
             plt.legend()
             plt.tight_layout()
 
-            plots_dir = Path("./data/plots") / source
+            plots_dir = OUTPUT_ROOT / "plots" / source
             plots_dir.mkdir(parents=True, exist_ok=True)
             plt.savefig(plots_dir / f"analysis_{source}_setup_{setup}.png")
             plt.close()
 
     # Save CSV summaries per source
-    csv_root = Path("./data/csv")
+    csv_root = OUTPUT_ROOT / "csv"
     csv_root.mkdir(parents=True, exist_ok=True)
     for source, source_results in results.items():
         rows = []
@@ -493,7 +516,9 @@ def analyze_results():
                 writer.writerow(row)
 
     # Save summary statistics
-    with open("data/swm_summary.json", "w") as f:
+    summary_path = OUTPUT_ROOT / "swm_summary.json"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(summary_path, "w") as f:
         json.dump(results, f, indent=4)
 
     return results
