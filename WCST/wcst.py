@@ -14,6 +14,7 @@ from .utils import (
     wcst_generator,
     string_generator,
     check_rule_ambiguity,
+    count_vowels,
 )
 
 try:
@@ -103,6 +104,154 @@ Your final answer should be a number between 1-4 corresponding to the index of t
 """
 
 
+ATTRIBUTE_LABELS = {
+    "number": "number of symbols",
+    "color": "symbol color",
+    "shape": "shape",
+    "background": "background color",
+    "length": "length",
+    "vowels": "number of vowels",
+    "consonants": "number of consonants",
+}
+
+
+TEXT_REFERENCE_CARDS = [
+    {"number": "one", "color": "red", "shape": "circle", "background": "red"},
+    {"number": "two", "color": "green", "shape": "triangle", "background": "green"},
+    {"number": "three", "color": "blue", "shape": "star", "background": "blue"},
+    {"number": "four", "color": "yellow", "shape": "square", "background": "yellow"},
+]
+
+
+IMAGE_REFERENCE_CARDS = [
+    {"shape": "circle", "color": "red", "count": 1, "background": "red"},
+    {"shape": "triangle", "color": "green", "count": 2, "background": "green"},
+    {"shape": "star", "color": "blue", "count": 3, "background": "blue"},
+    {"shape": "square", "color": "yellow", "count": 4, "background": "yellow"},
+]
+
+
+def _text_card_signature(card, include_background=False):
+    values = [card["number"], card["color"], card["shape"]]
+    if include_background:
+        values.append(card["background"])
+    return tuple(sorted(values))
+
+
+def _match_card_from_text(card_text, bg_color=False):
+    tokens = [token.lower() for token in card_text.split()]
+    signature = tuple(sorted(tokens))
+
+    for card in TEXT_REFERENCE_CARDS:
+        card_signature = _text_card_signature(card, include_background=bg_color)
+        if card_signature == signature:
+            if bg_color:
+                return card.copy()
+            return {k: card[k] for k in ("number", "color", "shape")}
+    return None
+
+
+def _parse_given_card_text(given_text, bg_color=False):
+    parts = [part.lower() for part in given_text.split()]
+    if len(parts) < 3:
+        return {}
+
+    result = {
+        "number": parts[0],
+        "color": parts[1],
+        "shape": parts[2].rstrip("s"),
+    }
+
+    if bg_color:
+        background = parts[3] if len(parts) > 3 else parts[1]
+        result["background"] = background
+
+    return result
+
+
+def _shared_attributes_card(given_text, option_text, bg_color=False):
+    chosen_card = _match_card_from_text(option_text, bg_color=bg_color)
+    given_attrs = _parse_given_card_text(given_text, bg_color=bg_color)
+    if not chosen_card or not given_attrs:
+        return []
+
+    attrs = []
+    for key in ("number", "color", "shape"):
+        if given_attrs.get(key) == chosen_card.get(key):
+            attrs.append(key)
+    if bg_color and given_attrs.get("background") == chosen_card.get("background"):
+        attrs.append("background")
+    return attrs
+
+
+def _shared_attributes_string(given_text, option_text):
+    attrs = []
+    if len(given_text) == len(option_text):
+        attrs.append("length")
+
+    given_vowels = count_vowels(given_text)
+    option_vowels = count_vowels(option_text)
+    if given_vowels == option_vowels:
+        attrs.append("vowels")
+
+    given_consonants = len(given_text) - given_vowels
+    option_consonants = len(option_text) - option_vowels
+    if given_consonants == option_consonants:
+        attrs.append("consonants")
+
+    return attrs
+
+
+def _shared_attributes_image(given_attrs, option_card, bg_color=False):
+    attrs = []
+    if given_attrs.get("count") == option_card.get("count"):
+        attrs.append("number")
+    if given_attrs.get("color") == option_card.get("color"):
+        attrs.append("color")
+    if given_attrs.get("shape") == option_card.get("shape"):
+        attrs.append("shape")
+    if bg_color and given_attrs.get("background") == option_card.get("background"):
+        attrs.append("background")
+    return attrs
+
+
+def _format_attribute_list(attributes):
+    if not attributes:
+        return "no shared attribute"
+
+    labels = [ATTRIBUTE_LABELS.get(attr, attr) for attr in attributes]
+    if len(labels) == 1:
+        return labels[0]
+    if len(labels) == 2:
+        return " and ".join(labels)
+
+    return ", ".join(labels[:-1]) + f", and {labels[-1]}"
+
+
+def _format_notes_history(current_turn, notes_history, window):
+    if not notes_history:
+        return ""
+
+    relevant = notes_history[-window:]
+    lines = ["Recent notes:"]
+
+    for entry in reversed(relevant):
+        delta = current_turn - entry["turn_index"]
+        if delta <= 0:
+            continue
+        attr_text = _format_attribute_list(entry["matched_attributes"])
+        outcome = entry.get("outcome", "unknown")
+        
+        lines.append(
+            f"- Turn -{delta}: matching {attr_text} — {'Correct' if outcome else 'Incorrect'}."
+        )
+
+    if len(lines) == 1:
+        return ""
+
+    return "\n".join(lines) + "\n"
+
+
 def run_wcst(
     model="llama",
     variant="card",
@@ -114,6 +263,8 @@ def run_wcst(
     few_shot=False,
     cot=False,
     hint=False,
+    notes=False,
+    notes_window=6,
     model_source="hf",
     max_tokens=512,
     think_budget=64,
@@ -133,6 +284,8 @@ def run_wcst(
         few_shot: Whether to use few-shot prompting
         cot: Whether to use chain-of-thought reasoning
         hint: Whether to provide hints
+    notes: Whether to prepend structured notes from recent turns to the next prompt
+    notes_window: Number of previous turns to retain in the notes (default: 6)
         model_source: The source of the model ("hf", "google", "litellm", "vllm")
         max_tokens: Maximum number of tokens to generate
         think_budget: Budget tokens for reasoning
@@ -147,7 +300,7 @@ def run_wcst(
         "WCST",
         "data",
         "text",
-        f"{model_source}_{model.replace('/', '-')}_{variant}_{max_trials}-{num_correct}{'-bg' if bg_color else ''}_{ambiguous_mode}{'_hint' if hint else ''}.json",
+        f"{model_source}_{model.replace('/', '-')}_{variant}_{max_trials}-{num_correct}{'-bg' if bg_color else ''}_{ambiguous_mode}{'_notes' if notes else ''}.json",
     )
 
     if few_shot and cot:
@@ -160,6 +313,13 @@ def run_wcst(
         save_path = save_path.replace(".json", "_cot.json")
 
     print(f"Saving to: {save_path}")
+
+    if notes:
+        try:
+            notes_window = int(notes_window)
+        except (TypeError, ValueError):
+            notes_window = 6
+        notes_window = max(1, notes_window)
 
     # Check if results already exist
     if os.path.exists(save_path):
@@ -226,6 +386,8 @@ def run_wcst(
         model_instance = None
         torch.cuda.empty_cache()
         save_rep = []
+        notes_history = []
+        turn_counter = 0
 
         model_instance = ModelWrapper(
             model, model_source, api_key=api_key, max_new_tokens=max_tokens
@@ -273,6 +435,7 @@ def run_wcst(
                             elif variant == "string":
                                 given, opt = string_generator(rule)
 
+                            option_lookup = {}
                             if variant == "empty":
                                 chosen = rule
                                 chosen_idx = rule
@@ -282,6 +445,10 @@ def run_wcst(
                                 chosen = opt[0]
                                 random.shuffle(opt)
                                 chosen_idx = opt.index(chosen) + 1
+
+                                option_lookup = {
+                                    idx + 1: value for idx, value in enumerate(opt)
+                                }
 
                                 test_prompt = f"""Given: {given}\nOptions:\n1. {opt[0]}\n2. {opt[1]}\n3. {opt[2]}\n4. {opt[3]}"""
 
@@ -296,8 +463,20 @@ def run_wcst(
                                 trial_bar.update(1)
 
                                 n_trials += 1
+                                prompt_prefix = correct_prefix
+                                if notes:
+                                    notes_block = _format_notes_history(
+                                        turn_counter + 1,
+                                        notes_history,
+                                        notes_window,
+                                    )
+                                    if notes_block:
+                                        if prompt_prefix and not prompt_prefix.endswith("\n"):
+                                            prompt_prefix += "\n"
+                                        prompt_prefix += notes_block
+
                                 response = model_instance.send_message(
-                                    correct_prefix + test_prompt,
+                                    prompt_prefix + test_prompt,
                                     truncate_history=True,
                                     cot=cot,
                                 )
@@ -332,6 +511,55 @@ def run_wcst(
                                     correct_bar.n = 0
                                     correct_bar.last_print_n = 0
                                     correct_bar.refresh()
+
+                                raw_answer = ans if ans is not None else None
+                                selected_option_label = (
+                                    raw_answer if raw_answer is not None else "N/A"
+                                )
+                                parsed_idx = None
+                                option_choice_text = None
+                                shared_attrs = []
+                                if raw_answer is not None:
+                                    try:
+                                        parsed_candidate = int(raw_answer)
+                                    except (TypeError, ValueError):
+                                        parsed_candidate = None
+
+                                    if parsed_candidate is not None:
+                                        selected_option_label = str(parsed_candidate)
+                                        if 1 <= parsed_candidate <= 4:
+                                            parsed_idx = parsed_candidate
+                                            if variant != "empty":
+                                                option_choice_text = option_lookup.get(
+                                                    parsed_idx
+                                                )
+                                            if variant in ["card", "card-random"]:
+                                                shared_attrs = _shared_attributes_card(
+                                                    given,
+                                                    option_choice_text or "",
+                                                    bg_color,
+                                                )
+                                            elif variant == "string":
+                                                shared_attrs = _shared_attributes_string(
+                                                    given,
+                                                    option_choice_text or "",
+                                                )
+                                            else:
+                                                shared_attrs = []
+
+                                note_data = {
+                                    "selected_option": selected_option_label,
+                                    "matched_attributes": shared_attrs,
+                                    "outcome": correct
+                                }
+
+                                turn_counter += 1
+                                if notes:
+                                    notes_history.append(
+                                        {**note_data, "turn_index": turn_counter}
+                                    )
+                                    if len(notes_history) > notes_window:
+                                        notes_history.pop(0)
 
                                 if n_trials % 50 == 0:
                                     tqdm.write(f"Rule: {rule}")
@@ -399,6 +627,8 @@ def run_wcst_image(
     few_shot=False,
     cot=False,
     hint=False,
+    notes=False,
+    notes_window=6,
     model_source="hf",
     max_tokens=512,
     think_budget=64,
@@ -416,6 +646,8 @@ def run_wcst_image(
         few_shot: Whether to use few-shot prompting
         cot: Whether to use chain-of-thought reasoning
         hint: Whether to provide hints
+    notes: Whether to prepend structured notes from recent turns to the next prompt
+    notes_window: Number of previous turns to retain in the notes (default: 6)
         model_source: The source of the model ("hf", "google", "litellm", "vllm")
         max_tokens: Maximum number of tokens to generate
         think_budget: Budget tokens for reasoning
@@ -432,7 +664,7 @@ def run_wcst_image(
         "WCST",
         "data",
         "image",
-        f"{model_source}_{model.replace('/', '-')}_image_{max_trials}-{num_correct}{'-bg' if bg_color else ''}_{ambiguous_mode}{'_hint' if hint else ''}.json",
+        f"{model_source}_{model.replace('/', '-')}_image_{max_trials}-{num_correct}{'-bg' if bg_color else ''}_{ambiguous_mode}{'_notes' if notes else ''}.json",
                                                         
     )
 
@@ -476,6 +708,13 @@ def run_wcst_image(
     if not bg_color:
         system_prompt = system_prompt.replace("4. Background color of the card", "")
 
+    if notes:
+        try:
+            notes_window = int(notes_window)
+        except (TypeError, ValueError):
+            notes_window = 6
+        notes_window = max(1, notes_window)
+
     if few_shot:
         system_prompt += generate_few_shot("card")
 
@@ -497,6 +736,8 @@ def run_wcst_image(
         model_instance = None
         torch.cuda.empty_cache()
         save_rep = []
+        notes_history = []
+        turn_counter = 0
 
         # Initialize model with image input capability
         model_instance = ModelWrapper(
@@ -574,8 +815,20 @@ def run_wcst_image(
                                 trial_bar.update(1)
 
                                 n_trials += 1
+                                prompt_prefix = correct_prefix
+                                if notes:
+                                    notes_block = _format_notes_history(
+                                        turn_counter + 1,
+                                        notes_history,
+                                        notes_window,
+                                    )
+                                    if notes_block:
+                                        if prompt_prefix and not prompt_prefix.endswith("\n"):
+                                            prompt_prefix += "\n"
+                                        prompt_prefix += notes_block
+
                                 response = model_instance.send_message(
-                                    correct_prefix + test_prompt,
+                                    prompt_prefix + test_prompt,
                                     truncate_history=True,
                                     cot=cot,
                                 )
@@ -610,6 +863,47 @@ def run_wcst_image(
                                     correct_bar.n = 0
                                     correct_bar.last_print_n = 0
                                     correct_bar.refresh()
+
+                                raw_answer = ans if ans is not None else None
+                                selected_option_label = (
+                                    raw_answer if raw_answer is not None else "N/A"
+                                )
+                                parsed_idx = None
+                                shared_attrs = []
+                                if raw_answer is not None:
+                                    try:
+                                        parsed_candidate = int(raw_answer)
+                                    except (TypeError, ValueError):
+                                        parsed_candidate = None
+
+                                    if parsed_candidate is not None:
+                                        selected_option_label = str(parsed_candidate)
+                                        if 1 <= parsed_candidate <= len(
+                                            IMAGE_REFERENCE_CARDS
+                                        ):
+                                            parsed_idx = parsed_candidate
+                                            option_card_attrs = IMAGE_REFERENCE_CARDS[
+                                                parsed_idx - 1
+                                            ]
+                                            shared_attrs = _shared_attributes_image(
+                                                given_card_attrs,
+                                                option_card_attrs,
+                                                bg_color=bg_color,
+                                            )
+
+                                note_data = {
+                                    "selected_option": selected_option_label,
+                                    "matched_attributes": shared_attrs,
+                                    "outcome": correct
+                                }
+
+                                turn_counter += 1
+                                if notes:
+                                    notes_history.append(
+                                        {**note_data, "turn_index": turn_counter}
+                                    )
+                                    if len(notes_history) > notes_window:
+                                        notes_history.pop(0)
 
                                 if n_trials % 50 == 0:
                                     tqdm.write(f"Rule: {rule}")
@@ -739,22 +1033,7 @@ def find_matching_card(given_attrs, rule):
         int: The card number (1-4) that matches the rule
     """
     # Define the 4 reference cards (same as in image.py)
-    reference_cards = [
-        {"shape": "circle", "color": "red", "count": 1, "background": "red"},  # Card 1
-        {
-            "shape": "triangle",
-            "color": "green",
-            "count": 2,
-            "background": "green",
-        },  # Card 2
-        {"shape": "star", "color": "blue", "count": 3, "background": "blue"},  # Card 3
-        {
-            "shape": "square",
-            "color": "yellow",
-            "count": 4,
-            "background": "yellow",
-        },  # Card 4
-    ]
+    reference_cards = IMAGE_REFERENCE_CARDS
 
     # Map rule names to attribute names
     rule_map = {
