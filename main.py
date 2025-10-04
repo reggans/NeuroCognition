@@ -56,6 +56,8 @@ Examples:
     wcst_parser.add_argument("--few_shot", action="store_true")
     wcst_parser.add_argument("--cot", action="store_true")
     wcst_parser.add_argument("--hint", action="store_true")
+    wcst_parser.add_argument("--notes", action="store_true")
+    wcst_parser.add_argument("--notes-window", type=int, default=6)
     wcst_parser.add_argument("--image", action="store_true")
     wcst_parser.add_argument("--bg-color", action="store_true")
     wcst_parser.add_argument(
@@ -197,6 +199,8 @@ Examples:
                 few_shot=args.few_shot,
                 cot=args.cot,
                 hint=args.hint,
+                notes=args.notes,
+                notes_window=args.notes_window,
                 model_source=args.model_source,
                 max_tokens=args.max_tokens,
                 think_budget=args.think_budget,
@@ -217,6 +221,8 @@ Examples:
                 few_shot=args.few_shot,
                 cot=args.cot,
                 hint=args.hint,
+                notes=args.notes,
+                notes_window=args.notes_window,
                 model_source=args.model_source,
                 max_tokens=args.max_tokens,
                 think_budget=args.think_budget,
