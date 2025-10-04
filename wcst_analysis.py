@@ -1,4 +1,5 @@
 import os
+import re
 import csv
 import json
 import argparse
@@ -7,27 +8,38 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 
+METRIC_KEYS = [
+    "accuracy",
+    "perserverative_error",
+    "cat_complete",
+    "first_cat_trials",
+    "failure_set",
+    "S_wcst",
+]
+
+
 def load_run_stats(stats_file):
     """Load WCST statistics from a JSON file"""
     with open(stats_file, "r") as f:
         return json.load(f)
 
 
-def complete_score(data):
-    scores = {
-        "accuracy": [],
-        "perserverative_error": [],
-        "cat_complete": [],
-        "first_cat_trials": [],
-        "failure_set": [],
-    }
+def complete_score(data, rule_requirement=None):
+    scores = {key: [] for key in METRIC_KEYS}
 
     for trial in data:
+        requirement = rule_requirement if rule_requirement is not None else 5
         correct_rule = ""
         perserverated_response = -1
         first_complete = False
         correct_run = 0
         conceptual_response = False
+
+        current_rule = None
+        current_rule_guesses = 0
+        current_rule_correct = 0
+        S_ri_values = []
+        unique_rules = set()
 
         total_complete = 0
         total_perseverated = 0
@@ -45,16 +57,33 @@ def complete_score(data):
                     first_complete = True
                     first_cat_trial_idx = i + 1
 
+            rule_name = query["rule"]
+            unique_rules.add(rule_name)
+
+            if rule_name != current_rule:
+                if (
+                    current_rule is not None
+                    and requirement
+                    and current_rule_correct >= requirement
+                ):
+                    S_ri_values.append(requirement / max(current_rule_guesses, 1))
+                current_rule = rule_name
+                current_rule_guesses = 0
+                current_rule_correct = 0
+
+            current_rule_guesses += 1
+
             # Always update correct_rule to current query's rule
             correct_rule = query["rule"]
 
             if query["correct"]:
                 total_correct += 1
                 correct_run += 1
+                current_rule_correct += 1
 
                 if correct_run >= 3:
                     conceptual_response = True
-                if correct_run >= 5:
+                if correct_run >= requirement:
                     total_complete += 1
             else:
                 correct_run = 0
@@ -68,8 +97,15 @@ def complete_score(data):
                     if ans == perserverated_response:
                         total_perseverated += 1
                     perserverated_response = ans
-                except:
+                except Exception:
                     continue
+
+        if (
+            current_rule is not None
+            and requirement
+            and current_rule_correct >= requirement
+        ):
+            S_ri_values.append(requirement / max(current_rule_guesses, 1))
 
         n_query = len(trial)
         scores["accuracy"].append(total_correct / n_query)
@@ -82,10 +118,81 @@ def complete_score(data):
         else:
             scores["first_cat_trials"].append(n_query + 1)
 
+        num_attributes = len(unique_rules)
+        total_rules_required = 2 * num_attributes if num_attributes else 1
+        scores["S_wcst"].append(
+            sum(S_ri_values) / total_rules_required if S_ri_values else 0.0
+        )
+
     for metric in scores:
         scores[metric] = np.mean(scores[metric])  # type: ignore
 
     return scores
+
+
+def _compute_model_stats(results_dict):
+    for setup_type in list(results_dict.keys()):
+        for category in list(results_dict[setup_type].keys()):
+            for model_name in list(results_dict[setup_type][category].keys()):
+                model_data = results_dict[setup_type][category][model_name]
+                metrics = [k for k in model_data if k != "n_files"]
+                stats_dict = {}
+                n_runs = len(model_data[metrics[0]]) if metrics else 0
+                for metric in metrics:
+                    arr = np.array(model_data[metric])
+                    if arr.size > 0:
+                        stats_dict[f"avg_{metric}"] = float(np.mean(arr))
+                        stats_dict[f"std_{metric}"] = float(np.std(arr))
+                        stats_dict[f"max_{metric}"] = float(np.max(arr))
+                        stats_dict[f"min_{metric}"] = float(np.min(arr))
+                    else:
+                        stats_dict[f"avg_{metric}"] = 0.0
+                        stats_dict[f"std_{metric}"] = 0.0
+                        stats_dict[f"max_{metric}"] = 0.0
+                        stats_dict[f"min_{metric}"] = 0.0
+                stats_dict["n_runs"] = n_runs
+                stats_dict["n_files"] = model_data.get("n_files", 0)
+                if n_runs > 0:
+                    results_dict[setup_type][category][model_name] = stats_dict
+                else:
+                    del results_dict[setup_type][category][model_name]
+
+
+def _normalize_category_for_hard_easy(category_name):
+    is_notes = category_name.endswith("_notes")
+    base = category_name[:-6] if is_notes else category_name
+    has_background = "_bg" in base
+    if "_bg" in base:
+        base = base.split("_bg")[0]
+    difficulty = "hard" if has_background else "easy"
+    normalized = f"{base}_{difficulty}"
+    if is_notes:
+        normalized += "_notes"
+    return normalized
+
+
+def _build_hard_easy_results(raw_results):
+    aggregated = {setup_type: {} for setup_type in raw_results.keys()}
+    for setup_type, categories in raw_results.items():
+        for category_name, models in categories.items():
+            if not models:
+                continue
+            normalized_category = _normalize_category_for_hard_easy(category_name)
+            if normalized_category not in aggregated[setup_type]:
+                aggregated[setup_type][normalized_category] = {}
+            for model_name, metrics in models.items():
+                if model_name not in aggregated[setup_type][normalized_category]:
+                    aggregated[setup_type][normalized_category][model_name] = {
+                        key: [] for key in METRIC_KEYS
+                    }
+                    aggregated[setup_type][normalized_category][model_name][
+                        "n_files"
+                    ] = 0
+                target = aggregated[setup_type][normalized_category][model_name]
+                for key in METRIC_KEYS:
+                    target[key].extend(metrics.get(key, []))
+                target["n_files"] += metrics.get("n_files", 0)
+    return aggregated
 
 
 def _flatten_metrics(metrics_dict):
@@ -157,6 +264,15 @@ def analyze_results(data_type: str = "image"):
             stem = stats_file.stem
             is_cot = "_cot" in stem or stem.endswith("cot")
             is_few_shot = "_few_shot" in stem
+            has_notes = "_notes" in stem
+
+            num_correct_required = None
+            match = re.search(r"_(\d+)-(\d+)", stem)
+            if match:
+                try:
+                    num_correct_required = int(match.group(2))
+                except ValueError:
+                    num_correct_required = None
 
             # Detect background mode variants (appear after e.g. image_ )
             background_mode = None
@@ -185,6 +301,9 @@ def analyze_results(data_type: str = "image"):
             else:
                 category = "non_cot"
 
+            if has_notes:
+                category = f"{category}_notes"
+
             # Dynamically add new category containers if needed
             if category not in results[setup_type]:
                 results[setup_type][category] = {}
@@ -197,33 +316,25 @@ def analyze_results(data_type: str = "image"):
                     continue
 
                 # Use the new complete_score function for each run
-                metric_lists = {
-                    "accuracy": [],
-                    "perserverative_error": [],
-                    "cat_complete": [],
-                    "first_cat_trials": [],
-                    "failure_set": [],
-                }
+                metric_lists = {key: [] for key in METRIC_KEYS}
                 for run_id, run_data in stats.items():
                     try:
-                        run_metrics = complete_score([run_data])
-                        for k in metric_lists:
+                        run_metrics = complete_score(
+                            [run_data], rule_requirement=num_correct_required
+                        )
+                        for k in METRIC_KEYS:
                             metric_lists[k].append(run_metrics[k])
                     except Exception as e:
                         print(f"  Error processing run {run_id}: {e}")
 
                 # Only add if we have at least one run
-                if any(len(metric_lists[k]) > 0 for k in metric_lists):
+                if any(len(metric_lists[k]) > 0 for k in METRIC_KEYS):
                     if model_name not in results[setup_type][category]:
                         results[setup_type][category][model_name] = {
-                            "accuracy": [],
-                            "perserverative_error": [],
-                            "cat_complete": [],
-                            "first_cat_trials": [],
-                            "failure_set": [],
-                            "n_files": 0,
+                            key: [] for key in METRIC_KEYS
                         }
-                    for k in metric_lists:
+                        results[setup_type][category][model_name]["n_files"] = 0
+                    for k in METRIC_KEYS:
                         results[setup_type][category][model_name][k].extend(
                             metric_lists[k]
                         )
@@ -233,34 +344,13 @@ def analyze_results(data_type: str = "image"):
                 print(f"  Error processing {stats_file.name}: {e}")
                 continue
 
-    # Calculate statistics and generate plots for each setup type
-    for setup_type in results:
-        # Calculate final statistics for each metric
-        for category in list(results[setup_type].keys()):
-            for model_name in list(results[setup_type][category].keys()):
-                model_data = results[setup_type][category][model_name]
-                metrics = [k for k in model_data if k != "n_files"]
-                stats_dict = {}
-                n_runs = len(model_data[metrics[0]]) if metrics else 0
-                for metric in metrics:
-                    arr = np.array(model_data[metric])
-                    if arr.size > 0:
-                        stats_dict[f"avg_{metric}"] = np.mean(arr)
-                        stats_dict[f"std_{metric}"] = np.std(arr)
-                        stats_dict[f"max_{metric}"] = np.max(arr)
-                        stats_dict[f"min_{metric}"] = np.min(arr)
-                    else:
-                        stats_dict[f"avg_{metric}"] = 0
-                        stats_dict[f"std_{metric}"] = 0
-                        stats_dict[f"max_{metric}"] = 0
-                        stats_dict[f"min_{metric}"] = 0
-                stats_dict["n_runs"] = n_runs
-                stats_dict["n_files"] = model_data["n_files"]
-                if n_runs > 0:
-                    results[setup_type][category][model_name] = stats_dict
-                else:
-                    del results[setup_type][category][model_name]
+    hard_easy_results = _build_hard_easy_results(results)
 
+    _compute_model_stats(results)
+    _compute_model_stats(hard_easy_results)
+
+    # Generate plots for each setup type
+    for setup_type in results:
         # Create figure with 2 subplots: accuracy and perserverative_error
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 12))
 
@@ -426,6 +516,14 @@ def analyze_results(data_type: str = "image"):
     # Save summary statistics
     with open("WCST/data/wcst_summary.json", "w") as f:
         json.dump(results, f, indent=4)
+
+    summary_path = Path(f"WCST/data/wcst_summary_{data_type}.json")
+    with open(summary_path, "w") as f:
+        json.dump(results, f, indent=4)
+
+    hard_easy_path = Path(f"WCST/data/wcst_hard_easy_{data_type}.json")
+    with open(hard_easy_path, "w") as f:
+        json.dump(hard_easy_results, f, indent=4)
 
     return results
 
