@@ -270,9 +270,46 @@ Examples:
         summary_path = os.path.join(args.output_dir, f"{base_name}_summary.json")
         history_path = os.path.join(args.output_dir, f"{base_name}_history.json")
         reasoning_path = os.path.join(args.output_dir, f"{base_name}_reasoning.json")
-        if os.path.exists(results_path) and args.batch_mode == "off":
-            print(f"Results already exist at {results_path}")
-            return
+        existing_results = []
+        existing_reasoning = []
+        existing_summary = None
+        if args.batch_mode == "off":
+            if os.path.exists(results_path):
+                try:
+                    with open(results_path, "r") as f:
+                        existing_results = json.load(f)
+                    print(
+                        f"Loaded {len(existing_results)} existing RAPM results; will resume run."
+                    )
+                except Exception as exc:
+                    print(
+                        f"Warning: couldn't load existing results ({exc}); starting fresh."
+                    )
+                    existing_results = []
+            if os.path.exists(summary_path):
+                try:
+                    with open(summary_path, "r") as f:
+                        existing_summary = json.load(f)
+                except Exception as exc:
+                    print(
+                        f"Warning: couldn't load existing summary ({exc}); ignoring."
+                    )
+                    existing_summary = None
+            if os.path.exists(reasoning_path):
+                try:
+                    with open(reasoning_path, "r") as f:
+                        existing_reasoning = json.load(f)
+                except Exception as exc:
+                    print(
+                        f"Warning: couldn't load existing reasoning traces ({exc}); ignoring."
+                    )
+                    existing_reasoning = []
+            if args.mode == "text" and isinstance(existing_summary, dict):
+                failed_from_summary = existing_summary.get("failed_items") or []
+                if failed_from_summary:
+                    print(
+                        f"Summary lists {len(failed_from_summary)} failed text items; they will be retried."
+                    )
         # Defer to module's batch logic by reusing its CLI style flow
         from RAPM.rapm_evaluation import batch_submit_rapm, batch_collect_rapm  # type: ignore
 
@@ -297,10 +334,26 @@ Examples:
         else:
             if args.mode == "image":
                 print("Starting RAPM image evaluation...")
-                results, summary, history, reasoning_traces = run_rapm_evaluation(args)  # type: ignore
+                results, summary, history, reasoning_traces = run_rapm_evaluation(  # type: ignore
+                    args,
+                    existing_results=existing_results,
+                    existing_reasoning=existing_reasoning,
+                    existing_summary=existing_summary,
+                    results_path=results_path,
+                    summary_path=summary_path,
+                    reasoning_path=reasoning_path,
+                )
             else:
                 print("Starting RAPM text evaluation...")
-                results, summary, history, reasoning_traces = run_text_rapm_evaluation(args)  # type: ignore
+                results, summary, history, reasoning_traces = run_text_rapm_evaluation(  # type: ignore
+                    args,
+                    existing_results=existing_results,
+                    existing_reasoning=existing_reasoning,
+                    existing_summary=existing_summary,
+                    results_path=results_path,
+                    summary_path=summary_path,
+                    reasoning_path=reasoning_path,
+                )
         with open(results_path, "w") as f:
             json.dump(results, f, indent=2)
         with open(summary_path, "w") as f:

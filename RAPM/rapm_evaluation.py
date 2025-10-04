@@ -4,7 +4,8 @@ All prompt construction, formatting, parsing, batch request building, and scorin
 live in `RAPM/rapm_utils.py` to keep this driver lean.
 """
 import argparse, json, os, re, sys, shutil
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
+from tempfile import NamedTemporaryFile
 
 try:  # pragma: no cover - optional dependency
     from tqdm.auto import tqdm  # type: ignore
@@ -77,14 +78,148 @@ def load_text_rapm_jsonl(path):
     return items
 
 
+def atomic_write_json(path, data):
+    if path is None:
+        return
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    with NamedTemporaryFile("w", dir=directory, delete=False, suffix=".tmp", encoding="utf-8") as tmp:
+        json.dump(data, tmp, indent=2)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+    os.replace(tmp.name, path)
+
+
+def compute_image_summary(results, args):
+    total_questions = len(results)
+    total_correct = sum(1 for r in results if r.get("is_correct"))
+    dataset_types = defaultdict(lambda: {"correct": 0, "total": 0})
+    for r in results:
+        dt = r.get("dataset_type")
+        if dt is None:
+            continue
+        dataset_types[dt]["total"] += 1
+        if r.get("is_correct"):
+            dataset_types[dt]["correct"] += 1
+    summary = {
+        "model": args.model,
+        "model_source": args.model_source,
+        "total_questions": total_questions,
+        "total_correct": total_correct,
+        "overall_accuracy": (total_correct / total_questions) if total_questions else 0,
+        "accuracy_by_type": {
+            dt: {
+                "correct": vals["correct"],
+                "total": vals["total"],
+                "accuracy": (vals["correct"] / vals["total"]) if vals["total"] else 0,
+            }
+            for dt, vals in dataset_types.items()
+        },
+        "args": vars(args),
+    }
+    return summary
+
+
+def compute_text_summary(results, args):
+    total = len(results)
+    total_correct = sum(1 for r in results if r.get("is_correct"))
+    cat_correct = defaultdict(int)
+    cat_total = defaultdict(int)
+    failed_items = []
+    for r in results:
+        cats = r.get("categories") or []
+        for c in cats:
+            if not c:
+                continue
+            cat_total[c] += 1
+            if r.get("is_correct"):
+                cat_correct[c] += 1
+        if r.get("failure_reason") or r.get("response") is None:
+            identifier = r.get("id") or r.get("question_id")
+            if identifier:
+                failed_items.append(identifier)
+    summary = {
+        "model": args.model,
+        "mode": "text",
+        "answer_mode": args.answer_mode,
+        "total": total,
+        "correct": total_correct,
+        "overall_accuracy": (total_correct / total) if total else 0,
+        "accuracy_by_category": {
+            c: {
+                "correct": cat_correct[c],
+                "total": cat_total[c],
+                "accuracy": (cat_correct[c] / cat_total[c]) if cat_total[c] else 0,
+            }
+            for c in sorted(cat_total.keys())
+        },
+        "failed_items": failed_items,
+        "args": vars(args),
+    }
+    return summary
+
+
+def save_progress(result_map, reasoning_map, args, results_path, summary_path, reasoning_path, mode):
+    results_list = list(result_map.values())
+    if mode == "image":
+        summary = compute_image_summary(results_list, args)
+    else:
+        summary = compute_text_summary(results_list, args)
+    atomic_write_json(results_path, results_list)
+    atomic_write_json(summary_path, summary)
+    if reasoning_map:
+        reasoning_list = list(reasoning_map.values())
+        atomic_write_json(reasoning_path, reasoning_list)
+
+
 # ---------------- Synchronous (image) ---------------- #
 
 
-def run_rapm_evaluation(args):
+def run_rapm_evaluation(
+    args,
+    existing_results=None,
+    existing_reasoning=None,
+    existing_summary=None,
+    results_path=None,
+    summary_path=None,
+    reasoning_path=None,
+):
+    existing_results = existing_results or []
+    existing_reasoning = existing_reasoning or []
+    existing_summary = existing_summary or {}
+    retry_ids = set()
+    if isinstance(existing_summary, dict):
+        failed_from_summary = existing_summary.get("failed_items") or []
+        for fid in failed_from_summary:
+            if fid is not None:
+                retry_ids.add(fid)
     limit = args.limit_per_type if args.limit_per_type > 0 else None
     questions = load_evaluation_data(args.eval_data, limit_per_type=limit)
     print(f"Loaded {len(questions)} questions")
     dataset_types = set(q["dataset_type"] for q in questions)
+    results_map = OrderedDict()
+    for res in existing_results:
+        rid = res.get("id")
+        if rid is None:
+            continue
+        if res.get("failure_reason") or res.get("response") is None:
+            retry_ids.add(rid)
+            continue
+        if rid in retry_ids or rid in results_map:
+            continue
+        results_map[rid] = res
+    reasoning_map = OrderedDict()
+    for trace in existing_reasoning:
+        key = trace.get("question_id") or trace.get("id")
+        if key is None or key in retry_ids or key in reasoning_map:
+            continue
+        reasoning_map[key] = trace
+    if retry_ids:
+        print(f"Will retry {len(retry_ids)} previously failed image items.")
+    processed_existing = len(results_map)
+    skipped = 0
+    if results_path and summary_path:
+        save_progress(results_map, reasoning_map, args, results_path, summary_path, reasoning_path, "image")
     model = ModelWrapper(
         args.model,
         args.model_source,
@@ -95,12 +230,21 @@ def run_rapm_evaluation(args):
         image_path=os.path.dirname(args.eval_data),
     )
     system_prompt = build_image_system_prompt(args)
-    results = []
     correct_by_type = defaultdict(int)
     total_by_type = defaultdict(int)
+    for res in results_map.values():
+        dt = res.get("dataset_type")
+        if dt is None:
+            continue
+        total_by_type[dt] += 1
+        if res.get("is_correct"):
+            correct_by_type[dt] += 1
     reasoning_traces = []
     current_image_path = None
     for i, q in enumerate(tqdm(questions, desc="Processing questions")):
+        if q["id"] in results_map:
+            skipped += 1
+            continue
         model.init_chat(system_prompt)
         src = os.path.join(os.path.dirname(args.eval_data), q["full_image"])
         current_image_path = os.path.join(model.image_path, "current.png")  # type: ignore
@@ -114,61 +258,79 @@ def run_rapm_evaluation(args):
         total_by_type[dt] += 1
         if is_correct:
             correct_by_type[dt] += 1
-        results.append(
-            {
-                "id": q["id"],
-                "dataset_type": dt,
-                "correct_answer": correct,
-                "predicted_answer": pred,
-                "is_correct": is_correct,
-                "response": resp,
-                "image_path": q["full_image"],
-            }
-        )
+        result_entry = {
+            "id": q["id"],
+            "dataset_type": dt,
+            "correct_answer": correct,
+            "predicted_answer": pred,
+            "is_correct": is_correct,
+            "response": resp,
+            "image_path": q["full_image"],
+        }
+        results_map[q["id"]] = result_entry
         if args.cot and model.reasoning_trace:
-            reasoning_traces.append(
-                {"question_id": q["id"], "reasoning": model.reasoning_trace[-1]}
-            )
+            reasoning_map[q["id"]] = {
+                "question_id": q["id"],
+                "reasoning": model.reasoning_trace[-1],
+            }
+        if results_path and summary_path:
+            save_progress(results_map, reasoning_map, args, results_path, summary_path, reasoning_path, "image")
         if (i + 1) % 100 == 0:
-            acc = sum(r["is_correct"] for r in results) / len(results)
-            print(f"Progress: {i+1}/{len(questions)} accuracy {acc:.3f}")
+            processed = len(results_map) - processed_existing
+            recent = list(results_map.values())[-processed:] if processed else []
+            acc = (
+                sum(r["is_correct"] for r in recent) / processed
+                if processed
+                else 0
+            )
+            print(
+                f"Progress: {i+1}/{len(questions)} (new processed: {processed}) accuracy {acc:.3f}"
+            )
     if current_image_path and os.path.exists(current_image_path):
         os.remove(current_image_path)
-    total_correct = sum(r["is_correct"] for r in results)
-    total_questions = len(results)
-    overall_acc = total_correct / total_questions if total_questions else 0
+    all_results = list(results_map.values())
+    summary = compute_image_summary(all_results, args)
+    total_correct = summary.get("total_correct", 0)
+    total_questions = summary.get("total_questions", 0)
+    overall_acc = summary.get("overall_accuracy", 0)
     print("\n=== RAPM IMAGE RESULTS ===")
     print(f"Model: {args.model}")
     print(f"Overall accuracy: {overall_acc:.3f} ({total_correct}/{total_questions})")
-    for dt in sorted(dataset_types):
-        acc = correct_by_type[dt] / total_by_type[dt] if total_by_type[dt] else 0
-        print(f"  {dt}: {acc:.3f} ({correct_by_type[dt]}/{total_by_type[dt]})")
-    summary = {
-        "model": args.model,
-        "model_source": args.model_source,
-        "total_questions": total_questions,
-        "total_correct": total_correct,
-        "overall_accuracy": overall_acc,
-        "accuracy_by_type": {
-            dt: {
-                "correct": correct_by_type[dt],
-                "total": total_by_type[dt],
-                "accuracy": (
-                    correct_by_type[dt] / total_by_type[dt] if total_by_type[dt] else 0
-                ),
-            }
-            for dt in dataset_types
-        },
-        "args": vars(args),
-    }
+    for dt in sorted(summary.get("accuracy_by_type", {})):
+        stats = summary["accuracy_by_type"][dt]
+        print(
+            f"  {dt}: {stats['accuracy']:.3f} ({stats['correct']}/{stats['total']})"
+        )
+    if results_path and summary_path:
+        save_progress(results_map, reasoning_map, args, results_path, summary_path, reasoning_path, "image")
+    reasoning_traces = list(reasoning_map.values())
+    if skipped:
+        print(f"Skipped {skipped} questions already present in results.")
     # history no longer persisted externally
-    return results, summary, [], reasoning_traces
+    return all_results, summary, [], reasoning_traces
 
 
 # ---------------- Synchronous (text) ---------------- #
 
 
-def run_text_rapm_evaluation(args):
+def run_text_rapm_evaluation(
+    args,
+    existing_results=None,
+    existing_reasoning=None,
+    existing_summary=None,
+    results_path=None,
+    summary_path=None,
+    reasoning_path=None,
+):
+    existing_results = existing_results or []
+    existing_reasoning = existing_reasoning or []
+    existing_summary = existing_summary or {}
+    retry_ids = set()
+    if isinstance(existing_summary, dict):
+        failed_from_summary = existing_summary.get("failed_items") or []
+        for fid in failed_from_summary:
+            if fid is not None:
+                retry_ids.add(fid)
     items = load_text_rapm_jsonl(args.eval_data)
     print(f"Loaded {len(items)} text RAPM items")
     model = ModelWrapper(
@@ -180,32 +342,56 @@ def run_text_rapm_evaluation(args):
         image_input=False,
     )
     system_prompt = build_text_system_prompt(args)
-    results = []
-    cat_correct = defaultdict(int)
-    cat_total = defaultdict(int)
-    reasoning_traces = []
-    failed_items = []  # track items where model failed to return a response
+    results_map = OrderedDict()
+    for res in existing_results:
+        rid = res.get("id")
+        if rid is None:
+            continue
+        if res.get("failure_reason") or res.get("response") is None:
+            retry_ids.add(rid)
+            continue
+        if rid in retry_ids or rid in results_map:
+            continue
+        results_map[rid] = res
+    reasoning_map = OrderedDict()
+    for trace in existing_reasoning:
+        key = trace.get("id") or trace.get("question_id")
+        if key is None or key in retry_ids or key in reasoning_map:
+            continue
+        reasoning_map[key] = trace
+    if retry_ids:
+        print(f"Will retry {len(retry_ids)} previously failed text items.")
+    skipped = 0
+    if results_path and summary_path:
+        save_progress(results_map, reasoning_map, args, results_path, summary_path, reasoning_path, "text")
     for item in tqdm(items, desc="Processing text RAPM"):
+        if item["id"] in results_map:
+            skipped += 1
+            continue
         model.init_chat(system_prompt)
         prompt = format_text_item_prompt(item, args.answer_mode)
         resp = model.send_message(prompt, cot=args.cot, truncate_history=True)
         if resp is None:
             # Record failure and continue without crashing
-            failed_items.append(item["id"])
-            results.append(
-                {
-                    "id": item["id"],
-                    "predicted_answer": None,
-                    "correct_index": item.get("correct_index"),
-                    **({} if args.answer_mode == "mc" else {"matches_gold": False, "constraint_valid": False}),
-                    "is_correct": False,
-                    "response": None,
-                    "categories": item["raw"].get("credited_categories")
-                    or item["raw"].get("assigned_categories")
-                    or ([item["raw"].get("primary_category")] if item["raw"].get("primary_category") else []),
-                    "failure_reason": "no_response",
-                }
-            )
+            result_entry = {
+                "id": item["id"],
+                "predicted_answer": None,
+                "correct_index": item.get("correct_index"),
+                **(
+                    {}
+                    if args.answer_mode == "mc"
+                    else {"matches_gold": False, "constraint_valid": False}
+                ),
+                "is_correct": False,
+                "response": None,
+                "categories": item["raw"].get("credited_categories")
+                or item["raw"].get("assigned_categories")
+                or ([item["raw"].get("primary_category")] if item["raw"].get("primary_category") else []),
+                "failure_reason": "no_response",
+            }
+            results_map[item["id"]] = result_entry
+            if results_path and summary_path:
+                save_progress(results_map, reasoning_map, args, results_path, summary_path, reasoning_path, "text")
             continue
         # NOTE: If failures correlate with very long outputs, consider lowering max_new_tokens
         # adaptively (e.g., halve after a None) or trimming the prompt. Placeholder left here
@@ -242,61 +428,46 @@ def run_text_rapm_evaluation(args):
             if item["raw"].get("primary_category")
             else []
         )
-        for c in cats:
-            if c:
-                cat_total[c] += 1
-                if is_correct:
-                    cat_correct[c] += 1
-        results.append(
-            {
-                "id": item["id"],
-                "predicted_answer": predicted,
-                "correct_index": ci,
-                **(
-                    {"matches_gold": matches_gold, "constraint_valid": constraint_valid}
-                    if args.answer_mode == "gen"
-                    else {}
-                ),
-                "is_correct": is_correct,
-                "response": resp,
-                "categories": cats,
-            }
-        )
+        result_entry = {
+            "id": item["id"],
+            "predicted_answer": predicted,
+            "correct_index": ci,
+            **(
+                {"matches_gold": matches_gold, "constraint_valid": constraint_valid}
+                if args.answer_mode == "gen"
+                else {}
+            ),
+            "is_correct": is_correct,
+            "response": resp,
+            "categories": cats,
+        }
+        results_map[item["id"]] = result_entry
         if args.cot and model.reasoning_trace:
-            reasoning_traces.append(
-                {"id": item["id"], "reasoning": model.reasoning_trace[-1]}
-            )
-    total_correct = sum(r["is_correct"] for r in results)
-    total = len(results)
-    overall_acc = total_correct / total if total else 0
+            reasoning_map[item["id"]] = {
+                "id": item["id"],
+                "reasoning": model.reasoning_trace[-1],
+            }
+        if results_path and summary_path:
+            save_progress(results_map, reasoning_map, args, results_path, summary_path, reasoning_path, "text")
+    all_results = list(results_map.values())
     print("\n=== RAPM TEXT RESULTS ===")
     print(f"Model: {args.model}")
+    summary = compute_text_summary(all_results, args)
+    total_correct = summary.get("correct", 0)
+    total = summary.get("total", 0)
+    overall_acc = summary.get("overall_accuracy", 0)
     print(f"Overall accuracy: {overall_acc:.3f} ({total_correct}/{total})")
-    if failed_items:
-        print(f"Failed items (no response) : {len(failed_items)} -> {failed_items[:10]}{'...' if len(failed_items) > 10 else ''}")
-    if cat_total:
-        for c in sorted(cat_total):
-            acc = cat_correct[c] / cat_total[c] if cat_total[c] else 0
-            print(f"  {c}: {acc:.3f} ({cat_correct[c]}/{cat_total[c]})")
-    summary = {
-        "model": args.model,
-        "mode": "text",
-        "answer_mode": args.answer_mode,
-        "total": total,
-        "correct": total_correct,
-        "overall_accuracy": overall_acc,
-        "accuracy_by_category": {
-            c: {
-                "correct": cat_correct[c],
-                "total": cat_total[c],
-                "accuracy": cat_correct[c] / cat_total[c] if cat_total[c] else 0,
-            }
-            for c in cat_total
-        },
-        "failed_items": failed_items,
-        "args": vars(args),
-    }
-    return results, summary, [], reasoning_traces
+    if summary.get("failed_items"):
+        fi = summary["failed_items"]
+        print(f"Failed items (no response) : {len(fi)} -> {fi[:10]}{'...' if len(fi) > 10 else ''}")
+    if summary.get("accuracy_by_category"):
+        for c in sorted(summary["accuracy_by_category"]):
+            stats = summary["accuracy_by_category"][c]
+            print(f"  {c}: {stats['accuracy']:.3f} ({stats['correct']}/{stats['total']})")
+    reasoning_traces = list(reasoning_map.values())
+    if skipped:
+        print(f"Skipped {skipped} items already present in results.")
+    return all_results, summary, [], reasoning_traces
 
 
 # ---------------- Batch submit / collect ---------------- #
@@ -458,19 +629,40 @@ def main():
     summary_path = os.path.join(args.output_dir, f"{base}_summary.json")
     reasoning_path = os.path.join(args.output_dir, f"{base}_reasoning.json")
 
+    existing_results = []
+    existing_reasoning = []
+    existing_summary = None
     if os.path.exists(results_path) and args.batch_mode == "off":
-        print(f"Results already exist at {results_path}")
-        with open(summary_path, "r") as f:
-            summary = json.load(f)
-        if args.mode == "image":
-            print(
-                f"Overall accuracy: {summary['overall_accuracy']:.3f} ({summary['total_correct']}/{summary['total_questions']})"
-            )
-        else:
-            print(
-                f"Overall accuracy: {summary['overall_accuracy']:.3f} ({summary['correct']}/{summary['total']})"
-            )
-        return
+        try:
+            with open(results_path, "r") as f:
+                existing_results = json.load(f)
+            print(f"Found {len(existing_results)} existing results at {results_path}. Will resume/skip duplicates.")
+        except Exception as exc:
+            print(f"Warning: failed to load existing results ({exc}). Starting fresh.")
+            existing_results = []
+        if os.path.exists(summary_path):
+            try:
+                with open(summary_path, "r") as f:
+                    existing_summary = json.load(f)
+            except Exception:
+                existing_summary = None
+        if os.path.exists(reasoning_path):
+            try:
+                with open(reasoning_path, "r") as f:
+                    existing_reasoning = json.load(f)
+            except Exception:
+                existing_reasoning = []
+        if existing_summary:
+            if args.mode == "image":
+                print(
+                    f"Existing accuracy: {existing_summary.get('overall_accuracy', 0):.3f} "
+                    f"({existing_summary.get('total_correct', 0)}/{existing_summary.get('total_questions', 0)})"
+                )
+            else:
+                print(
+                    f"Existing accuracy: {existing_summary.get('overall_accuracy', 0):.3f} "
+                    f"({existing_summary.get('correct', 0)}/{existing_summary.get('total', 0)})"
+                )
 
     if args.batch_mode == "submit":
         bid = batch_submit_rapm(args)
@@ -492,18 +684,31 @@ def main():
     else:
         if args.mode == "image":
             print("Starting image RAPM evaluation...")
-            results, summary, history, reasoning_traces = run_rapm_evaluation(args)
+            results, summary, history, reasoning_traces = run_rapm_evaluation(
+                args,
+                existing_results=existing_results if args.batch_mode == "off" else None,
+                existing_reasoning=existing_reasoning if args.batch_mode == "off" else None,
+                existing_summary=existing_summary if args.batch_mode == "off" else None,
+                results_path=results_path,
+                summary_path=summary_path,
+                reasoning_path=reasoning_path,
+            )
         else:
             print("Starting text RAPM evaluation...")
-            results, summary, history, reasoning_traces = run_text_rapm_evaluation(args)
+            results, summary, history, reasoning_traces = run_text_rapm_evaluation(
+                args,
+                existing_results=existing_results if args.batch_mode == "off" else None,
+                existing_reasoning=existing_reasoning if args.batch_mode == "off" else None,
+                existing_summary=existing_summary if args.batch_mode == "off" else None,
+                results_path=results_path,
+                summary_path=summary_path,
+                reasoning_path=reasoning_path,
+            )
 
-    with open(results_path, "w") as f:
-        json.dump(results, f, indent=2)
-    with open(summary_path, "w") as f:
-        json.dump(summary, f, indent=2)
+    atomic_write_json(results_path, results)
+    atomic_write_json(summary_path, summary)
     if reasoning_traces:
-        with open(reasoning_path, "w") as f:
-            json.dump(reasoning_traces, f, indent=2)
+        atomic_write_json(reasoning_path, reasoning_traces)
     print("Evaluation complete!")
 
 
