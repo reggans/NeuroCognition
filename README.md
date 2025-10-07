@@ -1,4 +1,4 @@
-# Cognitive Evaluation Suite
+# NeuroCognition Benchmark Suite
 
 A single entrypoint (`main.py`) to run three cognitive tests against LLMs:
 
