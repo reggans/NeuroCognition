@@ -57,10 +57,14 @@ Arguments:
 - `--max_trials` int (64)
 - `--num_correct` int (5)
 - `--repeats` int (1)
+- `--ambiguous` `off|first|rest` (default `off`) — ambiguous rule handling
 - `--few_shot` add demonstrations
 - `--cot` add reasoning (<think>)
 - `--hint` include rule hint
+- `--notes` enable note-taking assistance
+- `--notes-window` int (6) — note-taking window size
 - `--image` image-based WCST
+- `--bg-color` enable background color rule
 - `--model_source` `vllm|openai|openrouter` (default `vllm`)
 - `--max_tokens` (512), `--think_budget` (64), `--api_key`, `--verbose`
 
@@ -87,8 +91,9 @@ Arguments:
 - `--cot` enable reasoning
 - `--runs` int (1) — repeat full run, report average score
 - `--max_tokens` (512), `--think_budget` (64)
-- `--notes` note-taking assistance (text mode only)
-- `--image` image mode (1 token only; `--notes` not supported)
+- `--notes` note-taking assistance
+- `--image` image mode
+- `--image-only` enable image-only mode (requires `--image`)
 - `--api_key`
 
 Outputs:
@@ -120,6 +125,8 @@ Arguments:
 - `--limit_per_type` int (image only; default 100; 0 = no limit)
 - `--output_dir` (default `rapm_data`), `--verbose`
 - Text-only: `--answer_mode` `mc|gen` (default `mc`)
+- Batch API: `--batch_mode` `off|submit|collect` (default `off`)
+- Batch API: `--batch_requests_path`, `--batch_id`, `--batch_id_path`, `--batch_output_jsonl`, `--batch_completion_window` (default `24h`)
 
 Outputs:
 
