@@ -133,7 +133,7 @@ class ModelWrapper:
         if model_source in ["openai", "openrouter", "vllm"]:
             if model_source == "vllm":
                 api_key = "dummy"  # VLLM doesn't need a real API key
-                base_url = f"http://{os.getenv('VLLM_URL')}:8877/v1"
+                base_url = f"http://{os.getenv('VLLM_URL')}/v1"
             elif model_source == "openai":
                 if api_key is None:
                     api_key = os.getenv("OPENAI_API_KEY")
@@ -176,7 +176,10 @@ class ModelWrapper:
                 "Unsupported model source. Supported sources are: openai, openrouter, vllm."
             )
 
-    def init_chat(self, task_prompt,):
+    def init_chat(
+        self,
+        task_prompt,
+    ):
         self.history = [
             {"role": "system", "content": task_prompt},
         ]
@@ -207,6 +210,8 @@ class ModelWrapper:
             base64_image = encode_image_to_base64(image_file_path)
             content = []
             if message and not image_only:
+                if "qwen3" in self.model_name and not cot:
+                    message += "\n/no_think"
                 content.append({"type": "text", "text": message})
             content.append(
                 {
@@ -239,7 +244,7 @@ class ModelWrapper:
                     extra_body["reasoning"]["enabled"] = True
             else:
                 extra_body = {"reasoning": {"enabled": False}}
-        
+
         # Metadata placeholders
         self.last_finish_reason = None
         self.last_truncated = False
@@ -278,8 +283,12 @@ class ModelWrapper:
                             extra_body=extra_body,
                         )
                         raw_response = raw_resp.choices[0].message.content
-                        self.last_finish_reason = getattr(raw_resp.choices[0], "finish_reason", None)
-                        raw_reasoning = getattr(raw_resp.choices[0].message, "reasoning", None)
+                        self.last_finish_reason = getattr(
+                            raw_resp.choices[0], "finish_reason", None
+                        )
+                        raw_reasoning = getattr(
+                            raw_resp.choices[0].message, "reasoning", None
+                        )
                 else:  # openrouter or vllm
                     if stream:
                         stream_resp = self.client.chat.completions.create(
@@ -327,7 +336,9 @@ class ModelWrapper:
                                 f"Model returned error: {raw_resp.choices[0].message.content}"
                             )
                         raw_response = raw_resp.choices[0].message.content
-                        raw_reasoning = getattr(raw_resp.choices[0].message, "reasoning", None)
+                        raw_reasoning = getattr(
+                            raw_resp.choices[0].message, "reasoning", None
+                        )
 
                 # Detect truncation by finish_reason
                 if self.last_finish_reason in {"length", "max_tokens"}:
@@ -335,7 +346,9 @@ class ModelWrapper:
                 break  # success
             except Exception as e:
                 if stream and allow_partial_on_error and partial_buffer:
-                    print(f"Streaming error, returning partial after attempt {attempt}: {e}")
+                    print(
+                        f"Streaming error, returning partial after attempt {attempt}: {e}"
+                    )
                     raw_response = partial_buffer
                     raw_reasoning = None
                     break
@@ -377,7 +390,10 @@ class ModelWrapper:
                     **(
                         {"max_completion_tokens": max_new_tokens or self.max_new_tokens}
                         if self.model_source == "openai"
-                        else {"max_tokens": max_new_tokens or self.max_new_tokens, "temperature": 0.0}
+                        else {
+                            "max_tokens": max_new_tokens or self.max_new_tokens,
+                            "temperature": 0.0,
+                        }
                     ),
                 )
                 cont_text = cont_resp.choices[0].message.content
