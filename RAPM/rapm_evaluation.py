@@ -712,5 +712,166 @@ def main():
     print("Evaluation complete!")
 
 
+# ============================================================================
+# Environment-based evaluation (using RAPMEnv)
+# ============================================================================
+
+def run_rapm_with_env(
+    model,
+    model_source: str = "litellm",
+    data_path = None,
+    mode: str = "image",  # "image" or "text"
+    answer_mode: str = "mc",  # "mc" or "gen"
+    cot: bool = False,
+    think_budget: int = 256,
+    patterns: bool = False,
+    max_tokens: int = 512,
+    limit_per_type = None,
+    api_key = None,
+    save_dir = None,
+    verbose: bool = True,
+):
+    """
+    Run RAPM evaluation using the RAPMEnv/RAPMDatasetEnv environment classes.
+    
+    This provides a cleaner interface for RL training integration while
+    maintaining compatibility with existing analysis code.
+    
+    Args:
+        model: Model name/path
+        model_source: Model source ("litellm", "vllm", "google", etc.)
+        data_path: Path to evaluation data (JSON for image, JSONL for text)
+        mode: "image" or "text"
+        answer_mode: "mc" (multiple choice) or "gen" (generative)
+        cot: Enable chain-of-thought reasoning
+        think_budget: Token budget for CoT
+        patterns: Include pattern hints
+        max_tokens: Max tokens to generate
+        limit_per_type: Limit questions per dataset type
+        api_key: API key for model
+        save_dir: Directory to save results
+        verbose: Print progress
+        
+    Returns:
+        Dict with results and summary
+    """
+    from .rapm_env import RAPMEnv, RAPMDatasetEnv
+    
+    if data_path is None:
+        raise ValueError("data_path is required for RAPM evaluation")
+    
+    # Set up save paths
+    if save_dir is None:
+        save_dir = os.path.join("RAPM", "data", "env")
+    os.makedirs(save_dir, exist_ok=True)
+    
+    cot_suffix = "_cot" if cot else ""
+    model_name = model.replace("/", "-") if model else "unknown"
+    
+    save_prefix = os.path.join(
+        save_dir,
+        f"{model_source}_{model_name}_{mode}{cot_suffix}"
+    )
+    
+    # Load dataset
+    dataset_env = RAPMDatasetEnv(
+        data_path=data_path,
+        mode=mode,
+        answer_mode=answer_mode,
+        cot=cot,
+        think_budget=think_budget,
+        patterns=patterns,
+        limit_per_type=limit_per_type,
+    )
+    
+    if verbose:
+        print(f"Loaded {len(dataset_env)} questions")
+    
+    # Create model wrapper
+    image_mode = mode == "image"
+    image_base_path = os.path.dirname(data_path) if image_mode else None
+    
+    model_instance = ModelWrapper(
+        model,
+        model_source,
+        api_key=api_key,
+        max_new_tokens=max_tokens,
+        think_budget=think_budget,
+        image_input=image_mode,
+        image_path=image_base_path,
+    )
+    
+    results = []
+    
+    for i, (observation, env) in enumerate(dataset_env):
+        if verbose and i % 10 == 0:
+            print(f"Processing question {i + 1}/{len(dataset_env)}")
+        
+        # Get system prompt
+        system_prompt = env.get_system_prompt()
+        model_instance.init_chat(system_prompt)
+        
+        # For image mode, set up the image
+        if image_mode:
+            img_path = env.get_current_image_path()
+            if img_path and image_base_path:
+                # Copy image to current.png for model wrapper
+                src = os.path.join(image_base_path, env.get_image_path() or "")
+                if os.path.exists(src):
+                    current_path = os.path.join(image_base_path, "current.png")
+                    shutil.copy2(src, current_path)
+        
+        # Get model response
+        response = model_instance.send_message(
+            observation,
+            truncate_history=True,
+            cot=cot,
+        )
+        
+        if response is None:
+            result_entry = {
+                "id": env._current_question.id if env._current_question else f"q_{i}",
+                "failure_reason": "model_returned_none",
+                "is_correct": False,
+            }
+            results.append(result_entry)
+            continue
+        
+        # Step environment
+        step_result = env.step(response)
+        
+        # Get metrics
+        metrics = env.get_metrics()
+        
+        result_entry = {
+            "id": metrics.get("question_id"),
+            "is_correct": metrics.get("is_correct", False),
+            "attempts": metrics.get("attempts", 1),
+            "response": response,
+            "dataset_type": metrics.get("dataset_type"),
+            "categories": metrics.get("categories", []),
+        }
+        results.append(result_entry)
+        dataset_env.record_result(result_entry)
+    
+    # Get summary
+    summary = dataset_env.get_summary()
+    
+    if verbose:
+        print(f"\n=== RAPM Results ===")
+        print(f"Total: {summary.get('total', 0)}")
+        print(f"Correct: {summary.get('correct', 0)}")
+        print(f"Accuracy: {summary.get('accuracy', 0):.3f}")
+        
+        for dt, stats in summary.get("by_type", {}).items():
+            print(f"  {dt}: {stats['accuracy']:.3f} ({stats['correct']}/{stats['total']})")
+    
+    # Save results
+    atomic_write_json(f"{save_prefix}_results.json", results)
+    atomic_write_json(f"{save_prefix}_summary.json", summary)
+    
+    return {"results": results, "summary": summary}
+
+
 if __name__ == "__main__":
     main()

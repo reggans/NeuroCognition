@@ -134,3 +134,194 @@ def swm_main(model=None, model_source="hf", n_boxes=6, n_tokens=1, image_only=Fa
         tot_score += score(stats)
     print(f'Score: {tot_score / len(run_stats.keys())}')
     print(f"Finished runs: {sum([1 for stats in run_stats.values() if not stats.get('finished_run', False)])} out of {runs}")
+
+
+# ============================================================================
+# Environment-based evaluation (using SWMEnv)
+# ============================================================================
+
+def run_swm_with_env(
+    model = None,
+    model_source: str = "vllm",
+    n_boxes: int = 6,
+    n_tokens: int = 1,
+    mode: str = "text",  # "text" or "image"
+    cot: bool = False,
+    think_budget: int = 64,
+    note_assist: bool = False,
+    runs: int = 1,
+    max_tokens: int = 512,
+    api_key = None,
+    save_dir = None,
+    verbose: bool = True,
+):
+    """
+    Run SWM evaluation using the SWMEnv environment class.
+    
+    This provides a cleaner interface for RL training integration while
+    maintaining compatibility with existing analysis code.
+    
+    Args:
+        model: Model name/path
+        model_source: Model source ("vllm", "openai", "openrouter", etc.)
+        n_boxes: Number of boxes in the task
+        n_tokens: Number of token types
+        mode: "text" or "image"
+        cot: Enable chain-of-thought reasoning
+        think_budget: Token budget for CoT
+        note_assist: Enable note-taking assistance
+        runs: Number of runs
+        max_tokens: Max tokens to generate
+        api_key: API key for model
+        save_dir: Directory to save results
+        verbose: Print progress
+        
+    Returns:
+        Dict with run statistics and histories
+    """
+    from .swm_env import SWMEnv
+    
+    # Default model
+    if model is None:
+        if model_source == "vllm":
+            model = "Qwen/Qwen3-32B"
+        elif model_source == "openai":
+            model = "o4-mini-2025-04-16"
+        elif model_source == "openrouter":
+            model = "qwen/qwen3-235b-a22b-07-25"
+    
+    # Set up save paths
+    if save_dir is None:
+        save_dir = os.path.join("SWM", "data", "env")
+    os.makedirs(save_dir, exist_ok=True)
+    
+    image_mode = mode == "image"
+    image_path = os.path.join("SWM", "images") if image_mode else None
+    if image_path:
+        os.makedirs(image_path, exist_ok=True)
+    
+    cot_suffix = "_cot" if cot else ""
+    notes_suffix = "_notes" if note_assist else ""
+    
+    save_prefix = os.path.join(
+        save_dir,
+        f"{model_source}_{model.replace('/', '-')}_{mode}{cot_suffix}{notes_suffix}_{n_boxes}_{n_tokens}"
+    )
+    
+    results = {
+        "runs": {},
+        "config": {
+            "model": model,
+            "model_source": model_source,
+            "n_boxes": n_boxes,
+            "n_tokens": n_tokens,
+            "mode": mode,
+            "cot": cot,
+            "note_assist": note_assist,
+        }
+    }
+    
+    for run_idx in range(runs):
+        if verbose:
+            print(f"\n=== Run {run_idx + 1}/{runs} ===")
+        
+        torch.cuda.empty_cache()
+        
+        # Create environment
+        env = SWMEnv(
+            n_boxes=n_boxes,
+            n_tokens=n_tokens,
+            mode=mode,
+            cot=cot,
+            think_budget=think_budget,
+            note_assist=note_assist,
+            image_path=image_path,
+            seed=run_idx,
+        )
+        
+        # Create model wrapper
+        model_instance = ModelWrapper(
+            model,
+            model_source,
+            api_key=api_key,
+            max_new_tokens=max_tokens,
+            think_budget=think_budget,
+            image_input=image_mode,
+            image_path=image_path,
+        )
+        
+        # Initialize with system prompt
+        system_prompt = env.get_system_prompt()
+        model_instance.init_chat(system_prompt)
+        
+        # Run episode
+        observation = env.reset()
+        episode_history = []
+        
+        while not env._done:
+            # Get model response
+            response = model_instance.send_message(
+                observation,
+                truncate_history=True,
+                cot=cot,
+            )
+            
+            if response is None:
+                if verbose:
+                    print("Model returned None, ending episode early")
+                break
+            
+            # Step environment
+            result = env.step(response)
+            
+            # Record step
+            episode_history.append({
+                "observation": observation,
+                "response": response,
+                "reward": result.reward,
+                "done": result.done,
+                "info": result.info,
+            })
+            
+            observation = result.observation
+            
+            if result.done:
+                break
+        
+        # Get metrics
+        metrics = env.get_metrics()
+        
+        # Store results
+        run_key = f"run_{run_idx + 1}"
+        results["runs"][run_key] = {
+            "history": env.history,
+            "episode_history": episode_history,
+            "metrics": metrics,
+            "model_history": model_instance.history,
+            "reasoning_trace": model_instance.reasoning_trace,
+        }
+        
+        if verbose:
+            print(f"Tokens found: {metrics.get('tokens_found', 0)}")
+            print(f"Valid guesses: {metrics.get('valid', 0)}")
+            print(f"Total guesses: {metrics.get('total_guesses', 0)}")
+        
+        # Compute score
+        env_score = score(metrics)
+        if verbose:
+            print(f"Score: {env_score:.3f}")
+        
+        # Save intermediate results
+        with open(f"{save_prefix}_results.json", "w") as f:
+            json_results = {
+                "config": results["config"],
+                "runs": {}
+            }
+            for rk, rv in results["runs"].items():
+                json_results["runs"][rk] = {
+                    "history": rv["history"],
+                    "metrics": rv["metrics"],
+                }
+            json.dump(json_results, f, indent=2)
+    
+    return results
