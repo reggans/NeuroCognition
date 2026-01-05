@@ -2,6 +2,7 @@ import transformers
 import google
 import torch
 from tqdm.auto import tqdm
+from typing import Any, Dict, List, Optional
 
 import json, argparse, random, time, os, re
 import sys
@@ -1059,3 +1060,193 @@ def find_matching_card(given_attrs, rule):
     raise ValueError(
         f"No matching card found for rule '{rule}' with value '{given_value}'. Given card: {given_attrs}"
     )
+
+
+# ============================================================================
+# Environment-based evaluation (using WCSTEnv)
+# ============================================================================
+
+def run_wcst_with_env(
+    model: str = "llama",
+    model_source: str = "hf",
+    variant: str = "card",
+    max_trials: int = 64,
+    num_correct: int = 5,
+    bg_color: bool = False,
+    repeats: int = 1,
+    ambiguous_mode: str = "off",
+    cot: bool = False,
+    think_budget: int = 64,
+    hint: bool = False,
+    image_mode: bool = False,
+    image_path: Optional[str] = None,
+    max_tokens: int = 512,
+    api_key: Optional[str] = None,
+    save_dir: Optional[str] = None,
+    verbose: bool = True,
+) -> Dict[str, Any]:
+    """
+    Run WCST evaluation using the WCSTEnv environment class.
+    
+    This provides a cleaner interface for RL training integration while
+    maintaining compatibility with existing analysis code.
+    
+    Args:
+        model: Model name/path
+        model_source: Model source ("hf", "vllm", "litellm", "google", etc.)
+        variant: WCST variant ("card", "card-random", "string", "empty")
+        max_trials: Maximum trials per episode
+        num_correct: Consecutive correct needed per rule
+        bg_color: Include background color attribute
+        repeats: Number of runs
+        ambiguous_mode: Ambiguity control ("off", "first", "rest")
+        cot: Enable chain-of-thought reasoning
+        think_budget: Token budget for CoT
+        hint: Show rule hints
+        image_mode: Generate card images
+        image_path: Directory for generated images
+        max_tokens: Max tokens to generate
+        api_key: API key for model
+        save_dir: Directory to save results
+        verbose: Print progress
+        
+    Returns:
+        Dict with run statistics and histories
+    """
+    from .wcst_env import WCSTEnv
+    
+    # Set up save paths
+    if save_dir is None:
+        save_dir = os.path.join("WCST", "data", "env")
+    os.makedirs(save_dir, exist_ok=True)
+    
+    mode_suffix = "_image" if image_mode else "_text"
+    cot_suffix = "_cot" if cot else ""
+    bg_suffix = "_bg" if bg_color else ""
+    
+    save_prefix = os.path.join(
+        save_dir,
+        f"{model_source}_{model.replace('/', '-')}_{variant}_{max_trials}-{num_correct}{bg_suffix}{mode_suffix}{cot_suffix}"
+    )
+    
+    results = {
+        "runs": {},
+        "config": {
+            "model": model,
+            "model_source": model_source,
+            "variant": variant,
+            "max_trials": max_trials,
+            "num_correct": num_correct,
+            "bg_color": bg_color,
+            "ambiguous_mode": ambiguous_mode,
+            "cot": cot,
+            "image_mode": image_mode,
+        }
+    }
+    
+    for run_idx in range(repeats):
+        if verbose:
+            print(f"\n=== Run {run_idx + 1}/{repeats} ===")
+        
+        # Create environment
+        env = WCSTEnv(
+            variant=variant,
+            max_trials=max_trials,
+            num_correct=num_correct,
+            bg_color=bg_color,
+            ambiguous_mode=ambiguous_mode,
+            cot=cot,
+            think_budget=think_budget,
+            hint=hint,
+            image_mode=image_mode,
+            image_path=image_path,
+            seed=run_idx,
+        )
+        
+        # Create model wrapper
+        model_instance = ModelWrapper(
+            model,
+            model_source,
+            api_key=api_key,
+            max_new_tokens=max_tokens,
+            think_budget=think_budget,
+            image_input=image_mode,
+            image_path=image_path,
+        )
+        
+        # Initialize with system prompt
+        system_prompt = env.get_system_prompt()
+        model_instance.init_chat(system_prompt)
+        
+        # Run episode
+        observation = env.reset()
+        episode_history = []
+        
+        while not env._done:
+            # For image mode, the image is already generated in env
+            if image_mode:
+                img_path = env.get_current_image_path()
+                # Model wrapper handles image loading internally
+            
+            # Get model response
+            response = model_instance.send_message(
+                observation,
+                truncate_history=True,
+                cot=cot,
+            )
+            
+            if response is None:
+                if verbose:
+                    print("Model returned None, ending episode early")
+                break
+            
+            # Step environment
+            result = env.step(response)
+            
+            # Record step
+            episode_history.append({
+                "observation": observation,
+                "response": response,
+                "reward": result.reward,
+                "done": result.done,
+                "info": result.info,
+            })
+            
+            observation = result.observation
+            
+            if result.done:
+                break
+        
+        # Get metrics
+        metrics = env.get_metrics()
+        
+        # Store results in format compatible with existing analysis
+        run_key = f"run_{run_idx + 1}"
+        results["runs"][run_key] = {
+            "history": env.history,  # Raw history for analysis
+            "episode_history": episode_history,
+            "metrics": metrics,
+            "model_history": model_instance.history,
+            "reasoning_trace": model_instance.reasoning_trace,
+        }
+        
+        if verbose:
+            print(f"Accuracy: {metrics['accuracy']:.3f}")
+            print(f"Completed categories: {metrics['completed_categories']}")
+            print(f"Total trials: {metrics['total_trials']}")
+        
+        # Save intermediate results
+        with open(f"{save_prefix}_results.json", "w") as f:
+            # Convert history for JSON serialization
+            json_results = {
+                "config": results["config"],
+                "runs": {}
+            }
+            for rk, rv in results["runs"].items():
+                json_results["runs"][rk] = {
+                    "history": rv["history"],
+                    "metrics": rv["metrics"],
+                }
+            json.dump(json_results, f, indent=2)
+    
+    return results
