@@ -16,6 +16,17 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.base_env import CognitiveEnv, StepResult, ActionStatus
 
+# =============================================================================
+# REWARD CONFIGURATION - Modify these values to tune reward structure
+# =============================================================================
+REWARD_TOKEN_FOUND = 1.0       # Found a token in the box
+REWARD_VALID_GUESS = 0.1       # Valid guess (not repeated, legal box)
+REWARD_REPEATED_BOX = -0.1     # Opened same box again in current search
+REWARD_ILLEGAL_BOX = -0.2      # Box can't contain any more tokens
+REWARD_NO_BOX = -0.3           # Coordinate doesn't match any box (image mode)
+REWARD_INVALID_FORMAT = -0.5   # Answer not parseable
+REWARD_INVALID_ACTION = -0.5   # Box number out of range
+
 # Conditionally import SWMImage for image mode
 try:
     from .image import SWMImage
@@ -395,7 +406,7 @@ Your final answer should be a box number, wrapped with <answer> and </answer>"""
             
             return StepResult(
                 observation=self._format_observation(),
-                reward=-0.5,
+                reward=REWARD_INVALID_FORMAT,
                 done=False,
                 info=step_info
             )
@@ -410,7 +421,7 @@ Your final answer should be a box number, wrapped with <answer> and </answer>"""
             
             return StepResult(
                 observation=self._format_observation(),
-                reward=-0.5,
+                reward=REWARD_INVALID_ACTION,
                 done=False,
                 info=step_info
             )
@@ -426,7 +437,7 @@ Your final answer should be a box number, wrapped with <answer> and </answer>"""
             
             return StepResult(
                 observation=self._format_observation(),
-                reward=-0.3,
+                reward=REWARD_NO_BOX,
                 done=False,
                 info=step_info
             )
@@ -440,13 +451,13 @@ Your final answer should be a box number, wrapped with <answer> and </answer>"""
         
         if not is_legal:
             self._stats["illegal"] += 1
-            reward = -0.2
+            reward = REWARD_ILLEGAL_BOX
         elif is_repeated:
             self._stats["repeated"] += 1
-            reward = -0.1
+            reward = REWARD_REPEATED_BOX
         else:
             self._stats["valid"] += 1
-            reward = 0.1
+            reward = REWARD_VALID_GUESS
         
         # Add box to opened set
         state.opened_boxes.add(chosen_box)
@@ -470,7 +481,7 @@ Your final answer should be a box number, wrapped with <answer> and </answer>"""
             self._feedback = ""
             for token in found_tokens:
                 self._feedback = f"Token {token} found in box {box_desc}.\n" + self._feedback
-            reward += 1.0  # Bonus for finding token
+            reward += REWARD_TOKEN_FOUND  # Bonus for finding token
             
             # Regenerate tokens in new locations
             for token in found_tokens:
@@ -559,14 +570,17 @@ Your final answer should be a box number, wrapped with <answer> and </answer>"""
         """Compute total episode reward."""
         total = 0.0
         for step in self.history:
-            if step.get("status") in [ActionStatus.INVALID_FORMAT.value, ActionStatus.INVALID_ACTION.value]:
-                total -= 0.5
+            if step.get("status") == ActionStatus.INVALID_FORMAT.value:
+                total += REWARD_INVALID_FORMAT
+            elif step.get("status") == ActionStatus.INVALID_ACTION.value:
+                total += REWARD_INVALID_ACTION
+            elif step.get("status") == ActionStatus.NOBOX.value:
+                total += REWARD_NO_BOX
             elif step.get("found"):
-                total += 1.1  # 1.0 for find + 0.1 for valid
+                total += REWARD_TOKEN_FOUND + REWARD_VALID_GUESS
             else:
-                # Check if it was illegal or repeated
-                # This is approximate; exact tracking would need more info
-                total += 0.1
+                # Valid guess but no token found (could be legal, illegal, or repeated)
+                total += REWARD_VALID_GUESS
         return total
     
     def get_metrics(self) -> Dict[str, Any]:

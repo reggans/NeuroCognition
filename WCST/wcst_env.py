@@ -15,6 +15,14 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.base_env import CognitiveEnv, StepResult, ActionStatus
 from WCST.utils import wcst_generator, string_generator, check_rule_ambiguity, count_vowels
 
+# =============================================================================
+# REWARD CONFIGURATION - Modify these values to tune reward structure
+# =============================================================================
+REWARD_CORRECT = 1.0           # Correct answer
+REWARD_INCORRECT = -0.1        # Wrong answer (valid format)
+REWARD_INVALID_FORMAT = -0.5   # Answer not parseable
+REWARD_INVALID_ACTION = -0.5   # Answer out of range (not 1-4)
+
 # Try to import image generation (optional, requires PIL)
 try:
     from WCST.image import draw_five_cards
@@ -499,7 +507,7 @@ class WCSTEnv(CognitiveEnv):
             
             return StepResult(
                 observation=self._format_observation(),
-                reward=-0.5,
+                reward=REWARD_INVALID_FORMAT,
                 done=False,
                 info=step_info
             )
@@ -514,7 +522,7 @@ class WCSTEnv(CognitiveEnv):
             
             return StepResult(
                 observation=self._format_observation(),
-                reward=-0.5,
+                reward=REWARD_INVALID_ACTION,
                 done=False,
                 info=step_info
             )
@@ -528,7 +536,7 @@ class WCSTEnv(CognitiveEnv):
             self._feedback = "Correct!\n"
             self._consecutive_correct += 1
             self._total_correct += 1
-            reward = 1.0
+            reward = REWARD_CORRECT
             
             # Check if rule is mastered
             if self._consecutive_correct >= self.num_correct:
@@ -543,7 +551,7 @@ class WCSTEnv(CognitiveEnv):
         else:
             self._feedback = "Incorrect. Please try again.\n"
             self._consecutive_correct = 0
-            reward = -0.1
+            reward = REWARD_INCORRECT
         
         # Check termination conditions
         done = False
@@ -621,13 +629,13 @@ class WCSTEnv(CognitiveEnv):
         total = 0.0
         for step in self.history:
             if step.get("status") == ActionStatus.INVALID_FORMAT.value:
-                total -= 0.5
+                total += REWARD_INVALID_FORMAT
             elif step.get("status") == ActionStatus.INVALID_ACTION.value:
-                total -= 0.5
+                total += REWARD_INVALID_ACTION
             elif step.get("correct"):
-                total += 1.0
+                total += REWARD_CORRECT
             else:
-                total -= 0.1
+                total += REWARD_INCORRECT
         return total
     
     def get_metrics(self) -> Dict[str, Any]:
