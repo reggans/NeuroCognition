@@ -14,6 +14,13 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.base_env import CognitiveEnv, StepResult, ActionStatus
 
+# =============================================================================
+# REWARD CONFIGURATION - Modify these values to tune reward structure
+# =============================================================================
+REWARD_CORRECT = 1.0           # Correct answer
+REWARD_INCORRECT = 0.0         # Wrong answer (valid format)
+REWARD_INVALID_FORMAT = -0.5   # Answer not parseable
+
 
 @dataclass
 class RAPMQuestion:
@@ -353,7 +360,7 @@ class RAPMEnv(CognitiveEnv):
                 self._done = True
                 return StepResult(
                     observation="",
-                    reward=-0.5,
+                    reward=REWARD_INVALID_FORMAT,
                     done=True,
                     info=step_info,
                     truncated=True
@@ -361,7 +368,7 @@ class RAPMEnv(CognitiveEnv):
             
             return StepResult(
                 observation="Please answer with the correct format: <answer>your answer</answer>",
-                reward=-0.5,
+                reward=REWARD_INVALID_FORMAT,
                 done=False,
                 info=step_info
             )
@@ -375,7 +382,7 @@ class RAPMEnv(CognitiveEnv):
                 self._done = True
                 return StepResult(
                     observation="",
-                    reward=-0.5,
+                    reward=REWARD_INVALID_FORMAT,
                     done=True,
                     info=step_info,
                     truncated=True
@@ -383,7 +390,7 @@ class RAPMEnv(CognitiveEnv):
             
             return StepResult(
                 observation="Please answer with a number between 1 and 8.",
-                reward=-0.5,
+                reward=REWARD_INVALID_FORMAT,
                 done=False,
                 info=step_info
             )
@@ -393,7 +400,7 @@ class RAPMEnv(CognitiveEnv):
         step_info["is_correct"] = is_correct
         self.history.append(step_info)
         
-        reward = 1.0 if is_correct else 0.0
+        reward = REWARD_CORRECT if is_correct else REWARD_INCORRECT
         self._done = True
         self._answered = True
         
@@ -463,9 +470,11 @@ class RAPMEnv(CognitiveEnv):
         total = 0.0
         for step in self.history:
             if step.get("status") in [ActionStatus.INVALID_FORMAT.value, ActionStatus.INVALID_ACTION.value]:
-                total -= 0.5
+                total += REWARD_INVALID_FORMAT
             elif step.get("is_correct"):
-                total += 1.0
+                total += REWARD_CORRECT
+            else:
+                total += REWARD_INCORRECT
         return total
     
     def get_metrics(self) -> Dict[str, Any]:
