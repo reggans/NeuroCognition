@@ -1,35 +1,48 @@
-for box in 8 10
-do
-    for token in 1 2
-    do
-        # python main.py --model gpt-4.5-preview-2025-02-27 --model_source litellm --runs 5 --n_boxes $box --n_tokens $token
-        # # python main.py --model gpt-4o-mini-2024-07-18 --model_source litellm --runs 5 --n_boxes $box --n_tokens $token
-        # python main.py --model gemini/gemini-2.0-flash --model_source litellm --runs 5 --n_boxes $box --n_tokens $token
-        # # python main.py --model gemini/gemini-1.5-pro --model_source litellm --runs 5 --n_boxes $box --n_tokens $token
-        # python main.py --model anthropic/claude-3-7-sonnet-latest --model_source litellm --runs 5 --n_boxes $box --n_tokens $token
-        # # python main.py --model anthropic/claude-3-5-haiku-latest --model_source litellm --runs 5 --n_boxes $box --n_tokens $token
+#!/bin/bash
 
-        # python main.py --model unsloth/DeepSeek-R1-Distill-Llama-8B-unsloth-bnb-4bit --model_source hf --max_tokens 2048 --runs 5 --n_boxes $box --n_tokens $token
-        python main.py --model unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit --model_source hf --max_tokens 2048 --runs 3 --n_boxes $box --n_tokens $token
+set -e  # Exit on error
 
-        # python main.py --model gpt-4.5-preview-2025-02-27 --model_source litellm --runs 5 --n_boxes $box --cot implicit --n_tokens $token
-        # # python main.py --model gpt-4o-mini-2024-07-18 --model_source litellm --runs 5 --n_boxes $box --cot implicit --n_tokens $token
-        # python main.py --model gemini/gemini-2.0-flash --model_source litellm --runs 5 --n_boxes $box --cot implicit --n_tokens $token
-        # # python main.py --model gemini/gemini-1.5-flash --model_source litellm --runs 5 --n_boxes $box --cot implicit --n_tokens $token
-        # python main.py --model anthropic/claude-3-7-sonnet-latest --model_source litellm --runs 5 --n_boxes $box --cot implicit --n_tokens $token
-        # # python main.py --model anthropic/claude-3-5-haiku-latest --model_source litellm --runs 5 --n_boxes $box --cot implicit --n_tokens $token
+# Model configuration
+MODEL_SOURCE="openrouter"
+MODEL="google/gemini-2.5-pro"
 
-        # python main.py --model unsloth/DeepSeek-R1-Distill-Llama-8B-unsloth-bnb-4bit --model_source hf --max_tokens 2048 --runs 5 --n_boxes $box --n_tokens $token --cot implicit
-        python main.py --model unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit --model_source hf --max_tokens 2048 --runs 3 --n_boxes $box --n_tokens $token --cot implicit
+echo "==================================="
+echo "CognitiveEval Test Suite"
+echo "==================================="
+echo "Model Source: $MODEL_SOURCE"
+echo "Model: $MODEL"
+echo ""
 
-        # python main.py --model gpt-4.5-preview-2025-02-27 --model_source litellm --runs 5 --n_boxes $box --cot explicit --n_tokens $token
-        # # python main.py --model gpt-4o-mini-2024-07-18 --model_source litellm --runs 5 --n_boxes $box --cot explicit --n_tokens $token
-        # python main.py --model gemini/gemini-2.0-flash --model_source litellm --runs 5 --n_boxes $box --cot explicit --n_tokens $token
-        # # python main.py --model gemini/gemini-1.5-pro --model_source litellm --runs 5 --n_boxes $box --cot explicit --n_tokens $token
-        # python main.py --model anthropic/claude-3-7-sonnet-latest --model_source litellm --runs 5 --n_boxes $box --cot explicit --n_tokens $token
-        # # python main.py --model anthropic/claude-3-5-haiku-latest --model_source litellm --runs 5 --n_boxes $box --cot explicit --n_tokens $token
+echo "Testing Wisconsin Card Sorting Test (WCST)..."
+python main.py wcst \
+    --model_source "$MODEL_SOURCE" \
+    --model "$MODEL" \
+    --cot \
+    --max_trials 64 \
+    --num_correct 5 \
+    --repeats 3 \
+    --ambiguous off
 
-        # python main.py --model unsloth/DeepSeek-R1-Distill-Llama-8B-unsloth-bnb-4bit --model_source hf --max_tokens 2048 --runs 5 --n_boxes $box --n_tokens $token --cot explicit
-        python main.py --model unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit --model_source hf --max_tokens 2048 --runs 3 --n_boxes $box --n_tokens $token --cot explicit
-    done
-done
+echo ""
+echo "Testing Spatial Working Memory (SWM)..."
+python main.py swm \
+    --model_source "$MODEL_SOURCE" \
+    --model "$MODEL" \
+    --cot \
+    --n_boxes 8 \
+    --n_tokens 1 \
+    --runs 3
+
+echo ""
+echo "Testing Raven's Progressive Matrices (RAPM)..."
+
+python main.py rapm \
+    --model_source "$MODEL_SOURCE" \
+    --model "$MODEL" \
+    --mode text \
+    --eval_data RAPM/sample_text_rapm.jsonl \
+    --cot \
+    --answer_mode mc
+
+echo ""
+echo "All tests completed!"
