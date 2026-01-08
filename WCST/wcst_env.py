@@ -690,9 +690,8 @@ class WCSTEnv(CognitiveEnv):
             # Track this option as seen (for repeat detection)
             if parsed_action is not None:
                 self._seen_options_this_rule.add(parsed_action)
-            
-            # Failure to Maintain Set: error after achieving conceptual level (3+ correct)
-            if self._consecutive_correct >= 3:
+            # Failure to Maintain Set: error after achieving conceptual level (2+ correct)
+            if self._consecutive_correct >= 2:
                 is_failure_to_maintain = True
                 self._failure_to_maintain_set += 1
                 reward += self.reward_failure_to_maintain
