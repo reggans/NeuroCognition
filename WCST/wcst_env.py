@@ -18,10 +18,15 @@ from WCST.utils import wcst_generator, string_generator, check_rule_ambiguity, c
 # =============================================================================
 # REWARD CONFIGURATION - Modify these values to tune reward structure
 # =============================================================================
+# Basic rewards
 REWARD_CORRECT = 1.0           # Correct answer
-REWARD_INCORRECT = -0.1        # Wrong answer (valid format)
+REWARD_INCORRECT = 0.0         # Wrong answer (valid format)
 REWARD_INVALID_FORMAT = -0.5   # Answer not parseable
 REWARD_INVALID_ACTION = -0.5   # Answer out of range (not 1-4)
+
+# WCST-specific error penalties (applied in addition to REWARD_INCORRECT)
+REWARD_PERSEVERATIVE_ERROR = -0.2   # Repeating same wrong answer after negative feedback
+REWARD_FAILURE_TO_MAINTAIN = -0.3   # Error after achieving conceptual response (3+ correct)
 
 # Try to import image generation (optional, requires PIL)
 try:
@@ -30,7 +35,6 @@ try:
 except ImportError:
     draw_five_cards = None  # type: ignore
     HAS_PIL = False
-
 
 # System prompts
 WCST_PROMPTS = {
@@ -228,6 +232,14 @@ class WCSTEnv(CognitiveEnv):
         self._rule_cycle = 0  # Track how many times we've cycled through rules
         self._feedback = ""
         
+        # WCST-specific error tracking
+        self._previous_rule_idx: Optional[int] = None  # For perseverative error detection
+        self._last_response: Optional[int] = None      # Last response given by model
+        self._perseverative_errors = 0                 # Count of perseverative errors
+        self._failure_to_maintain_set = 0              # FMS count (error after 3+ correct)
+        self._conceptual_responses = 0                 # 3+ consecutive correct in a row
+        self._first_after_rule_change = False          # Skip perseverative penalty on first trial after rule change
+        
     def get_system_prompt(self) -> str:
         """Get the system prompt for WCST."""
         if self.image_mode:
@@ -261,6 +273,14 @@ class WCSTEnv(CognitiveEnv):
         self._rule_cycle = 0
         self._feedback = ""
         self._force_ambig = self.ambiguous_mode == "first"
+        
+        # Reset WCST-specific error tracking
+        self._previous_rule_idx = None
+        self._last_response = None
+        self._perseverative_errors = 0
+        self._failure_to_maintain_set = 0
+        self._conceptual_responses = 0
+        self._first_after_rule_change = False
         
         # Generate first trial
         self._current_trial = self._generate_trial()
@@ -397,6 +417,68 @@ class WCSTEnv(CognitiveEnv):
         """Get the path to the current image (image mode only)."""
         return self._current_image_path
     
+    def _parse_card_attrs(self, card_desc: str) -> Dict[str, str]:
+        """
+        Parse a card description string into attributes.
+        
+        Card format: "one red circle" or "two green triangle" etc.
+        With bg_color: "one red circle green" (last word is background)
+        """
+        parts = card_desc.lower().split()
+        
+        numbers = {"one", "two", "three", "four"}
+        colors = {"red", "green", "blue", "yellow"}
+        shapes = {"circle", "triangle", "star", "square"}
+        
+        attrs = {}
+        bg_color = None
+        
+        for part in parts:
+            if part in numbers:
+                attrs["number"] = part
+            elif part in colors:
+                # If we already have color, this must be background
+                if "color" in attrs:
+                    bg_color = part
+                else:
+                    attrs["color"] = part
+            elif part in shapes:
+                attrs["shape"] = part
+        
+        if bg_color:
+            attrs["background"] = bg_color
+        
+        return attrs
+    
+    def _get_correct_for_rule(self, trial: WCSTTrial, rule_idx: int) -> Optional[int]:
+        """
+        Get the correct answer index for a specific rule on this trial.
+        
+        Used for perseverative error detection - determine what answer would
+        be correct if the model was using a different rule.
+        
+        Returns None if cannot determine (e.g., empty variant or parse error).
+        """
+        if self.variant not in ["card", "card-random"]:
+            # For string/empty variants, skip perseverative detection
+            return None
+        
+        rule = self.rules[rule_idx]
+        given_attrs = self._parse_card_attrs(trial.given)
+        
+        if rule not in given_attrs:
+            return None
+        
+        target_value = given_attrs[rule]
+        
+        # Find which option matches the given card on this rule
+        for i, option in enumerate(trial.options, 1):
+            option_attrs = self._parse_card_attrs(option)
+            if option_attrs.get(rule) == target_value:
+                return i
+        
+        return None
+    
     def _format_observation(self) -> str:
         """Format the current trial as an observation string."""
         trial = self._current_trial
@@ -530,7 +612,14 @@ class WCSTEnv(CognitiveEnv):
         # Check if answer is correct
         correct = parsed_action == trial.correct_idx
         step_info["correct"] = correct
-        self.history.append(step_info)
+        
+        # WCST-specific error detection
+        is_perseverative = False
+        is_failure_to_maintain = False
+        
+        # Capture and clear first-after-rule-change flag BEFORE processing
+        is_first_after_rule_change = self._first_after_rule_change
+        self._first_after_rule_change = False
         
         if correct:
             self._feedback = "Correct!\n"
@@ -538,20 +627,59 @@ class WCSTEnv(CognitiveEnv):
             self._total_correct += 1
             reward = REWARD_CORRECT
             
+            # Track conceptual response (3+ consecutive correct)
+            if self._consecutive_correct >= 3:
+                self._conceptual_responses += 1
+            
             # Check if rule is mastered
             if self._consecutive_correct >= self.num_correct:
                 self._completed_categories += 1
+                
+                # Store current rule as previous before changing
+                self._previous_rule_idx = self._current_rule_idx
+                
                 self._consecutive_correct = 0
                 self._current_rule_idx += 1
+                self._first_after_rule_change = True  # Mark next trial as first after change
                 
                 # Check if we've completed a full cycle
                 if self._current_rule_idx >= len(self.rules):
                     self._current_rule_idx = 0
                     self._rule_cycle += 1
         else:
+            # Error - check for WCST-specific error types
+            reward = REWARD_INCORRECT
+            
+            # Failure to Maintain Set: error after achieving conceptual level (3+ correct)
+            if self._consecutive_correct >= 3:
+                is_failure_to_maintain = True
+                self._failure_to_maintain_set += 1
+                reward += REWARD_FAILURE_TO_MAINTAIN
+            
+            # Perseverative Error: response matches previous rule after rule change
+            # Only check if there was a previous rule and NOT the first trial after rule change
+            if (self._previous_rule_idx is not None and 
+                self._previous_rule_idx != self._current_rule_idx and
+                parsed_action is not None and
+                not is_first_after_rule_change):  # Skip penalty on first trial after change
+                # Check if response would be correct under previous rule
+                prev_correct = self._get_correct_for_rule(trial, self._previous_rule_idx)
+                if parsed_action == prev_correct:
+                    is_perseverative = True
+                    self._perseverative_errors += 1
+                    reward += REWARD_PERSEVERATIVE_ERROR
+            
             self._feedback = "Incorrect. Please try again.\n"
             self._consecutive_correct = 0
-            reward = REWARD_INCORRECT
+        
+        # Store last response for potential future use
+        self._last_response = parsed_action
+        
+        # Add error type info to step_info
+        step_info["is_perseverative_error"] = is_perseverative
+        step_info["is_failure_to_maintain"] = is_failure_to_maintain
+        
+        self.history.append(step_info)
         
         # Check termination conditions
         done = False
@@ -597,6 +725,13 @@ class WCSTEnv(CognitiveEnv):
             "rule_cycle": self._rule_cycle,
             "feedback": self._feedback,
             "current_image_path": self._current_image_path,
+            # WCST-specific error tracking
+            "previous_rule_idx": self._previous_rule_idx,
+            "last_response": self._last_response,
+            "perseverative_errors": self._perseverative_errors,
+            "failure_to_maintain_set": self._failure_to_maintain_set,
+            "conceptual_responses": self._conceptual_responses,
+            "first_after_rule_change": self._first_after_rule_change,
         }
     
     def _set_internal_state(self, state: Dict[str, Any]) -> None:
@@ -623,6 +758,13 @@ class WCSTEnv(CognitiveEnv):
         self._rule_cycle = state.get("rule_cycle", 0)
         self._feedback = state.get("feedback", "")
         self._current_image_path = state.get("current_image_path")
+        # WCST-specific error tracking
+        self._previous_rule_idx = state.get("previous_rule_idx")
+        self._last_response = state.get("last_response")
+        self._perseverative_errors = state.get("perseverative_errors", 0)
+        self._failure_to_maintain_set = state.get("failure_to_maintain_set", 0)
+        self._conceptual_responses = state.get("conceptual_responses", 0)
+        self._first_after_rule_change = state.get("first_after_rule_change", False)
     
     def compute_episode_reward(self) -> float:
         """Compute total episode reward."""
@@ -635,7 +777,13 @@ class WCSTEnv(CognitiveEnv):
             elif step.get("correct"):
                 total += REWARD_CORRECT
             else:
+                # Base incorrect penalty
                 total += REWARD_INCORRECT
+                # Additional penalties for WCST-specific errors
+                if step.get("is_perseverative_error"):
+                    total += REWARD_PERSEVERATIVE_ERROR
+                if step.get("is_failure_to_maintain"):
+                    total += REWARD_FAILURE_TO_MAINTAIN
         return total
     
     def get_metrics(self) -> Dict[str, Any]:
@@ -643,6 +791,11 @@ class WCSTEnv(CognitiveEnv):
         total_trials = len(self.history)
         valid_trials = sum(1 for s in self.history if s.get("status") == ActionStatus.VALID.value)
         correct_trials = sum(1 for s in self.history if s.get("correct"))
+        total_errors = valid_trials - correct_trials
+        
+        # Calculate WCST-specific metrics from history
+        perseverative_errors = sum(1 for s in self.history if s.get("is_perseverative_error"))
+        failure_to_maintain_set = sum(1 for s in self.history if s.get("is_failure_to_maintain"))
         
         return {
             "total_trials": total_trials,
@@ -651,5 +804,11 @@ class WCSTEnv(CognitiveEnv):
             "accuracy": correct_trials / valid_trials if valid_trials > 0 else 0.0,
             "completed_categories": self._completed_categories,
             "rule_cycles_completed": self._rule_cycle,
+            # WCST-specific error metrics
+            "total_errors": total_errors,
+            "perseverative_errors": perseverative_errors,
+            "failure_to_maintain_set": failure_to_maintain_set,
+            "perseverative_error_rate": perseverative_errors / total_errors if total_errors > 0 else 0.0,
+            "conceptual_responses": self._conceptual_responses,
             "episode_reward": self.compute_episode_reward(),
         }
