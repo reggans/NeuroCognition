@@ -15,19 +15,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.base_env import CognitiveEnv, StepResult, ActionStatus
 from WCST.utils import wcst_generator, string_generator, check_rule_ambiguity, count_vowels
 
-# =============================================================================
-# REWARD CONFIGURATION - Modify these values to tune reward structure
-# =============================================================================
-# Basic rewards
-REWARD_CORRECT = 1.0           # Correct answer
-REWARD_INCORRECT = 0.0         # Wrong answer (valid format)
-REWARD_INVALID_FORMAT = -0.5   # Answer not parseable
-REWARD_INVALID_ACTION = -0.5   # Answer out of range (not 1-4)
-
-# WCST-specific error penalties (applied in addition to REWARD_INCORRECT)
-REWARD_PERSEVERATIVE_ERROR = -0.2   # Repeating same wrong answer after negative feedback
-REWARD_FAILURE_TO_MAINTAIN = -0.3   # Error after achieving conceptual response (3+ correct)
-
 # Try to import image generation (optional, requires PIL)
 try:
     from WCST.image import draw_five_cards
@@ -174,11 +161,14 @@ class WCSTEnv(CognitiveEnv):
         image_path: Optional[str] = None,
         image_only: bool = False,
         seed: Optional[int] = None,
-        invalid_format_penalty: float = -0.5,
-        invalid_action_penalty: float = -0.5,
-        invalid_exploration_penalty: float = -0.8,
-        perseveration_penalty: float = -0.8,
-        repeat_penalty: float = -0.8,
+        # Reward configuration
+        reward_correct: float = 1.0,
+        reward_incorrect: float = 0.0,
+        reward_invalid_format: float = -1.0,
+        reward_invalid_action: float = -1.0,
+        reward_repeat: float = -1,
+        reward_perseverative_error: float = -0.5,
+        reward_failure_to_maintain: float = -0.5,
     ):
         """
         Initialize the WCST environment.
@@ -196,11 +186,13 @@ class WCSTEnv(CognitiveEnv):
             image_path: Directory to save generated images (auto-created if needed)
             image_only: If True, observation only indicates image path (for vision models)
             seed: Random seed for reproducibility
-            invalid_format_penalty: Penalty for response not containing <answer> tags (default: -0.5)
-            invalid_action_penalty: Penalty for answer outside 1-4 range (default: -0.5)
-            invalid_exploration_penalty: Penalty for exploration with zero attribute overlap (default: -0.8)
-            perseveration_penalty: Penalty for perseverative error: rule known but wrong answer (default: -0.8)
-            repeat_penalty: Penalty for repeating same choice index within current rule cycle (default: -0.8)
+            reward_correct: Reward for correct answer (default: 1.0)
+            reward_incorrect: Reward for incorrect answer (default: 0.0)
+            reward_invalid_format: Penalty for response not containing <answer> tags (default: -1.0)
+            reward_invalid_action: Penalty for answer outside 1-4 range (default: -0.5)
+            reward_perseverative_error: Penalty for responding with previous rule after rule change (default: -0.5)
+            reward_failure_to_maintain: Penalty for error after 3+ consecutive correct (default: -0.5)
+            reward_repeat: Penalty for repeating same choice index within current rule cycle (default: -0.8)
         """
         super().__init__(seed=seed)
 
@@ -216,12 +208,14 @@ class WCSTEnv(CognitiveEnv):
         self.image_path = image_path
         self.image_only = image_only
 
-        # Penalty configuration
-        self.invalid_format_penalty = invalid_format_penalty
-        self.invalid_action_penalty = invalid_action_penalty
-        self.invalid_exploration_penalty = invalid_exploration_penalty
-        self.perseveration_penalty = perseveration_penalty
-        self.repeat_penalty = repeat_penalty
+        # Reward configuration
+        self.reward_correct = reward_correct
+        self.reward_incorrect = reward_incorrect
+        self.reward_invalid_format = reward_invalid_format
+        self.reward_invalid_action = reward_invalid_action
+        self.reward_perseverative_error = reward_perseverative_error
+        self.reward_failure_to_maintain = reward_failure_to_maintain
+        self.reward_repeat = reward_repeat
 
         # Validate image mode
         if image_mode:
@@ -618,7 +612,7 @@ class WCSTEnv(CognitiveEnv):
 
             return StepResult(
                 observation=self._format_observation(),
-                reward=REWARD_INVALID_FORMAT,
+                reward=self.reward_invalid_format,
                 done=False,
                 info=step_info,
             )
@@ -633,7 +627,7 @@ class WCSTEnv(CognitiveEnv):
 
             return StepResult(
                 observation=self._format_observation(),
-                reward=REWARD_INVALID_ACTION,
+                reward=self.reward_invalid_action,
                 done=False,
                 info=step_info,
             )
@@ -659,7 +653,7 @@ class WCSTEnv(CognitiveEnv):
             self._feedback = "Correct!\n"
             self._consecutive_correct += 1
             self._total_correct += 1
-            reward = REWARD_CORRECT
+            reward = self.reward_correct
             
             # Mark rule as known on first correct
             self._rule_known = True
@@ -691,7 +685,7 @@ class WCSTEnv(CognitiveEnv):
                 self._seen_options_this_rule = set()
         else:
             # Error - check for WCST-specific error types
-            reward = REWARD_INCORRECT
+            reward = self.reward_incorrect
             
             # Track this option as seen (for repeat detection)
             if parsed_action is not None:
@@ -701,7 +695,7 @@ class WCSTEnv(CognitiveEnv):
             if self._consecutive_correct >= 3:
                 is_failure_to_maintain = True
                 self._failure_to_maintain_set += 1
-                reward += REWARD_FAILURE_TO_MAINTAIN
+                reward += self.reward_failure_to_maintain
             
             # Perseverative Error: response matches previous rule after rule change
             # Only check if there was a previous rule and NOT the first trial after rule change
@@ -714,15 +708,12 @@ class WCSTEnv(CognitiveEnv):
                 if parsed_action == prev_correct:
                     is_perseverative = True
                     self._perseverative_errors += 1
-                    reward += REWARD_PERSEVERATIVE_ERROR
+                    reward += self.reward_perseverative_error
             
             # Repeat penalty: choosing same option again within current rule cycle
             if is_repeat:
-                reward += self.repeat_penalty
+                reward += self.reward_repeat
             
-            # Perseveration penalty (rule known but wrong): model should know the rule
-            if self._rule_known and not is_first_after_rule_change:
-                reward += self.perseveration_penalty
             
             self._feedback = "Incorrect. Please try again.\n"
             self._consecutive_correct = 0
@@ -855,19 +846,19 @@ class WCSTEnv(CognitiveEnv):
                 continue
             # Fallback to legacy aggregation
             if step.get("status") == ActionStatus.INVALID_FORMAT.value:
-                total += REWARD_INVALID_FORMAT
+                total += self.reward_invalid_format
             elif step.get("status") == ActionStatus.INVALID_ACTION.value:
-                total += REWARD_INVALID_ACTION
+                total += self.reward_invalid_action
             elif step.get("correct"):
-                total += REWARD_CORRECT
+                total += self.reward_correct
             else:
                 # Base incorrect penalty
-                total += REWARD_INCORRECT
+                total += self.reward_incorrect
                 # Additional penalties for WCST-specific errors
                 if step.get("is_perseverative_error"):
-                    total += REWARD_PERSEVERATIVE_ERROR
+                    total += self.reward_perseverative_error
                 if step.get("is_failure_to_maintain"):
-                    total += REWARD_FAILURE_TO_MAINTAIN
+                    total += self.reward_failure_to_maintain
         return total
 
     def get_metrics(self) -> Dict[str, Any]:
