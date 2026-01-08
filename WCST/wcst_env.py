@@ -31,6 +31,7 @@ REWARD_FAILURE_TO_MAINTAIN = -0.3   # Error after achieving conceptual response 
 # Try to import image generation (optional, requires PIL)
 try:
     from WCST.image import draw_five_cards
+
     HAS_PIL = True
 except ImportError:
     draw_five_cards = None  # type: ignore
@@ -118,39 +119,47 @@ If you are correct, you have to stick with the same answer until you are incorre
 There is always a true answer in the task, and you have to keep performing the task until the end of the test.
 Your final answer should be a number between 1-4 corresponding to the index of the answer you think is correct.
 
-"""
+""",
 }
 
 
 @dataclass
 class WCSTTrial:
     """Represents a single trial in the WCST."""
+
     given: str
     options: List[str]
     correct_idx: int  # 1-indexed
     rule: str  # Can be string for card/string variants or stringified int for empty
     is_ambiguous: Optional[bool] = None
     # For image mode: store card attributes
-    given_attrs: Optional[Dict[str, Any]] = None  # {"shape": ..., "color": ..., "count": ..., "background": ...}
+    given_attrs: Optional[Dict[str, Any]] = (
+        None  # {"shape": ..., "color": ..., "count": ..., "background": ...}
+    )
 
 
 class WCSTEnv(CognitiveEnv):
     """
     Wisconsin Card Sorting Test environment for RL training.
-    
+
     The environment presents card matching trials where the model must
     discover the current sorting rule through trial and error.
-    
-    Reward structure:
+
+    Reward structure (all penalties configurable):
     - +1.0 for correct answer
-    - -0.1 for incorrect answer
-    - -0.5 for invalid format
-    
+    - invalid_format_penalty (-0.5) for invalid answer format
+    - invalid_action_penalty (-0.5) for out-of-range answer (>4)
+    - 0.0 for ambiguous trial (multiple rules match)
+    - perseveration_penalty (-0.8) for perseverative error (rule known + wrong answer)
+    - repeat_penalty (-0.8) for repeating same choice within rule cycle
+    - invalid_exploration_penalty (-0.8) for exploration with no attribute overlap
+    - 0.0 for valid exploration (rule unknown + overlap + not repeated)
+
     Episode ends when:
     - max_trials is reached
-    - All categories are completed (num_correct consecutive correct per rule)
+    - 2 full rule cycles are completed (num_correct consecutive correct per rule)
     """
-    
+
     def __init__(
         self,
         variant: str = "card",
@@ -165,26 +174,36 @@ class WCSTEnv(CognitiveEnv):
         image_path: Optional[str] = None,
         image_only: bool = False,
         seed: Optional[int] = None,
+        invalid_format_penalty: float = -0.5,
+        invalid_action_penalty: float = -0.5,
+        invalid_exploration_penalty: float = -0.8,
+        perseveration_penalty: float = -0.8,
+        repeat_penalty: float = -0.8,
     ):
         """
         Initialize the WCST environment.
-        
+
         Args:
             variant: Type of WCST ("card", "card-random", "string", "empty")
             max_trials: Maximum number of trials before episode ends
-            num_correct: Consecutive correct answers needed per rule
-            bg_color: Whether to include background color attribute
+            num_correct: Consecutive correct answers needed per rule (e.g., 5 for realistic WCST)
+            bg_color: Whether to include background color attribute in card variants
             ambiguous_mode: Ambiguity control ("off", "first", "rest")
-            cot: Whether to request chain-of-thought reasoning
-            think_budget: Token budget for reasoning
-            hint: Whether to provide hints about the rule
-            image_mode: Whether to generate card images (requires PIL)
-            image_path: Directory to save generated images
-            image_only: If True, observation only indicates image path (for multimodal models)
+            cot: Whether to request chain-of-thought reasoning from the model
+            think_budget: Token budget for reasoning in CoT mode
+            hint: Whether to provide hints revealing the current rule
+            image_mode: Whether to generate card images (requires PIL/Pillow)
+            image_path: Directory to save generated images (auto-created if needed)
+            image_only: If True, observation only indicates image path (for vision models)
             seed: Random seed for reproducibility
+            invalid_format_penalty: Penalty for response not containing <answer> tags (default: -0.5)
+            invalid_action_penalty: Penalty for answer outside 1-4 range (default: -0.5)
+            invalid_exploration_penalty: Penalty for exploration with zero attribute overlap (default: -0.8)
+            perseveration_penalty: Penalty for perseverative error: rule known but wrong answer (default: -0.8)
+            repeat_penalty: Penalty for repeating same choice index within current rule cycle (default: -0.8)
         """
         super().__init__(seed=seed)
-        
+
         self.variant = variant
         self.max_trials = max_trials
         self.num_correct = num_correct
@@ -196,19 +215,30 @@ class WCSTEnv(CognitiveEnv):
         self.image_mode = image_mode
         self.image_path = image_path
         self.image_only = image_only
-        
+
+        # Penalty configuration
+        self.invalid_format_penalty = invalid_format_penalty
+        self.invalid_action_penalty = invalid_action_penalty
+        self.invalid_exploration_penalty = invalid_exploration_penalty
+        self.perseveration_penalty = perseveration_penalty
+        self.repeat_penalty = repeat_penalty
+
         # Validate image mode
         if image_mode:
             if not HAS_PIL:
-                raise ImportError("PIL/Pillow is required for image mode. Install with: pip install Pillow")
+                raise ImportError(
+                    "PIL/Pillow is required for image mode. Install with: pip install Pillow"
+                )
             if variant not in ["card", "card-random"]:
-                raise ValueError(f"Image mode only supports 'card' and 'card-random' variants, not '{variant}'")
+                raise ValueError(
+                    f"Image mode only supports 'card' and 'card-random' variants, not '{variant}'"
+                )
             if image_path is None:
                 self.image_path = os.path.join("WCST", "images")
             os.makedirs(self.image_path, exist_ok=True)  # type: ignore
-        
+
         self._current_image_path: Optional[str] = None
-        
+
         # Set up rules based on variant
         if variant in ["card", "card-random"]:
             self.rules = ["color", "shape", "number"]
@@ -220,18 +250,26 @@ class WCSTEnv(CognitiveEnv):
             self.rules = [1, 2, 3, 4]
         else:
             raise ValueError(f"Unknown variant: {variant}")
-        
+
         # Episode state
         self._current_trial: Optional[WCSTTrial] = None
-        self._current_rule_idx = 0
-        self._consecutive_correct = 0
-        self._completed_categories = 0
-        self._n_trials = 0
-        self._total_correct = 0
-        self._force_ambig = False
-        self._rule_cycle = 0  # Track how many times we've cycled through rules
-        self._feedback = ""
-        
+        self._current_rule_idx = 0  # Index into self.rules for current sorting rule
+        self._consecutive_correct = 0  # Consecutive correct answers under current rule
+        self._completed_categories = 0  # Number of rules fully mastered
+        self._n_trials = 0  # Total trials executed this episode
+        self._total_correct = 0  # Total correct answers this episode
+        self._force_ambig = False  # Force ambiguous trials when ambiguous_mode != "off"
+        self._rule_cycle = (
+            0  # Complete cycles through all rules (episode ends at cycle 2)
+        )
+        self._feedback = ""  # Feedback message ("Correct!" or "Incorrect.")
+        # _rule_known: Track whether model has discovered current rule (set on first correct, reset on rule change)
+        # This is independent of _consecutive_correct streak and persists across incorrect answers.
+        self._rule_known = False
+        # _seen_options_this_rule: Track option indices (1-4) chosen in current rule cycle to detect non-learning repeats.
+        # Reset on every correct answer (fresh exploration context), persists on incorrect answers (detect non-learning).
+        self._seen_options_this_rule: set = set()
+
         # WCST-specific error tracking
         self._previous_rule_idx: Optional[int] = None  # For perseverative error detection
         self._last_response: Optional[int] = None      # Last response given by model
@@ -246,21 +284,21 @@ class WCSTEnv(CognitiveEnv):
             prompt = WCST_PROMPTS.get("card-image", WCST_PROMPTS["card"])
         else:
             prompt = WCST_PROMPTS.get(self.variant, WCST_PROMPTS["card"])
-        
+
         if self.cot:
             prompt += f"Explain your thought process regarding the problem and the feedbacks you received in maximum {self.think_budget} tokens wrapped with <think> and </think>. Then, provide a really short summary of your reasoning after the closing </think> tag.\n"
         else:
             prompt += "Answer only with your final answer.\n"
-        
+
         prompt += """State your final answer using the template: "<answer>your answer</answer>"\n"""
-        
+
         return prompt
-    
+
     def reset(self) -> str:
-        """Reset the environment and return initial observation."""
+        """Reset the environment to initial state and return first trial observation."""
         if self.seed is not None:
             random.seed(self.seed)
-        
+
         # Reset state
         self.step_count = 0
         self.history = []
@@ -281,16 +319,22 @@ class WCSTEnv(CognitiveEnv):
         self._failure_to_maintain_set = 0
         self._conceptual_responses = 0
         self._first_after_rule_change = False
+        self._rule_known = False
+        self._seen_options_this_rule: set = set()
         
         # Generate first trial
         self._current_trial = self._generate_trial()
-        
+
         return self._format_observation()
-    
+
     def _generate_trial(self) -> WCSTTrial:
-        """Generate a new trial based on current rule."""
+        """Generate a new trial for the current sorting rule.
+
+        Cards/strings are randomized each trial. The given card and options
+        are always distinct, but trials have no memory of previous choices.
+        """
         rule = self.rules[self._current_rule_idx]
-        
+
         if self.variant == "empty":
             # Empty variant: no cards, just numbers
             return WCSTTrial(
@@ -298,15 +342,18 @@ class WCSTEnv(CognitiveEnv):
                 options=["", "", "", ""],
                 correct_idx=int(rule),
                 rule=str(rule),
-                is_ambiguous=False
+                is_ambiguous=False,
             )
-        
+
         # Generate cards/strings based on variant
         if self.variant in ["card", "card-random"]:
             randomize = self.variant == "card-random"
             if self.ambiguous_mode != "off":
                 given, options = wcst_generator(
-                    rule, randomize=randomize, bg_color=self.bg_color, ambiguous=self._force_ambig
+                    rule,
+                    randomize=randomize,
+                    bg_color=self.bg_color,
+                    ambiguous=self._force_ambig,
                 )
                 # Update ambiguity for next trial
                 if self.ambiguous_mode == "rest":
@@ -314,64 +361,68 @@ class WCSTEnv(CognitiveEnv):
                 else:
                     self._force_ambig = False
             else:
-                given, options = wcst_generator(rule, randomize=randomize, bg_color=self.bg_color)
-            
+                given, options = wcst_generator(
+                    rule, randomize=randomize, bg_color=self.bg_color
+                )
+
             # The correct answer is always the first in the original list
             correct_option = options[0]
             random.shuffle(options)
             correct_idx = options.index(correct_option) + 1
-            
+
             # Check ambiguity
             is_ambiguous = None
             if self.ambiguous_mode != "off":
                 try:
-                    is_ambiguous = check_rule_ambiguity(given, correct_option, bg_color=self.bg_color)
+                    is_ambiguous = check_rule_ambiguity(
+                        given, correct_option, bg_color=self.bg_color
+                    )
                 except:
                     pass
-            
+
             # Parse card attributes for image mode
             given_attrs = None
             if self.image_mode:
                 given_attrs = self._parse_card_description(given)
-            
+
             return WCSTTrial(
                 given=given,
                 options=options,
                 correct_idx=correct_idx,
                 rule=str(rule),
                 is_ambiguous=is_ambiguous,
-                given_attrs=given_attrs
+                given_attrs=given_attrs,
             )
-        
+
         elif self.variant == "string":
             given, options = string_generator(rule)
             correct_option = options[0]
             random.shuffle(options)
             correct_idx = options.index(correct_option) + 1
-            
+
             return WCSTTrial(
                 given=given,
                 options=options,
                 correct_idx=correct_idx,
                 rule=str(rule),
-                is_ambiguous=False
+                is_ambiguous=False,
             )
-        
+
         raise ValueError(f"Unknown variant: {self.variant}")
-    
+
     def _parse_card_description(self, description: str) -> Dict[str, Any]:
         """Parse a card description string into attributes for image generation."""
         parts = description.lower().split()
-        
+
         # Number mapping
         number_map = {"one": 1, "two": 2, "three": 3, "four": 4}
         # Color options
         colors = ["red", "green", "blue", "yellow"]
         # Shape options
         shapes = ["circle", "triangle", "star", "square"]
-        
+
         attrs: Dict[str, Any] = {"shape": "circle", "color": "red", "count": 1}
-        
+
         for part in parts:
             if part in number_map:
                 attrs["count"] = number_map[part]
@@ -383,7 +434,7 @@ class WCSTEnv(CognitiveEnv):
                     attrs["background"] = part
             elif part in shapes:
                 attrs["shape"] = part
-        
+
         # If bg_color mode and we have a background in the description
         if self.bg_color and len(parts) > 3:
             # The last color mentioned is likely the background
@@ -391,64 +442,31 @@ class WCSTEnv(CognitiveEnv):
                 if part in colors and part != attrs.get("color"):
                     attrs["background"] = part
                     break
-        
+
         return attrs
-    
+
     def _generate_image(self) -> None:
         """Generate card image for the current trial (image mode only)."""
         if not self.image_mode or self._current_trial is None:
             return
-        
+
         if draw_five_cards is None:
             return
-        
+
         trial = self._current_trial
         if trial.given_attrs is None:
             return
-        
+
         # Generate the image
         draw_five_cards(trial.given_attrs, bg_color=self.bg_color)
-        
+
         # Update current image path
         assert self.image_path is not None
         self._current_image_path = os.path.join(self.image_path, "current.png")
-    
+
     def get_current_image_path(self) -> Optional[str]:
         """Get the path to the current image (image mode only)."""
         return self._current_image_path
-    
-    def _parse_card_attrs(self, card_desc: str) -> Dict[str, str]:
-        """
-        Parse a card description string into attributes.
-        
-        Card format: "one red circle" or "two green triangle" etc.
-        With bg_color: "one red circle green" (last word is background)
-        """
-        parts = card_desc.lower().split()
-        
-        numbers = {"one", "two", "three", "four"}
-        colors = {"red", "green", "blue", "yellow"}
-        shapes = {"circle", "triangle", "star", "square"}
-        
-        attrs = {}
-        bg_color = None
-        
-        for part in parts:
-            if part in numbers:
-                attrs["number"] = part
-            elif part in colors:
-                # If we already have color, this must be background
-                if "color" in attrs:
-                    bg_color = part
-                else:
-                    attrs["color"] = part
-            elif part in shapes:
-                attrs["shape"] = part
-        
-        if bg_color:
-            attrs["background"] = bg_color
-        
-        return attrs
     
     def _get_correct_for_rule(self, trial: WCSTTrial, rule_idx: int) -> Optional[int]:
         """
@@ -459,22 +477,29 @@ class WCSTEnv(CognitiveEnv):
         
         Returns None if cannot determine (e.g., empty variant or parse error).
         """
+        if self.variant == "empty":
+            # For empty variant, the rule IS the answer
+            return int(self.rules[rule_idx])
+        
         if self.variant not in ["card", "card-random"]:
-            # For string/empty variants, skip perseverative detection
+            # For string variant, skip perseverative detection
             return None
         
         rule = self.rules[rule_idx]
-        given_attrs = self._parse_card_attrs(trial.given)
+        given_attrs = self._parse_card_description(trial.given)
         
-        if rule not in given_attrs:
+        # Map rule name to attribute key
+        attr_key = "count" if rule == "number" else rule
+        
+        if attr_key not in given_attrs:
             return None
         
-        target_value = given_attrs[rule]
+        target_value = given_attrs[attr_key]
         
         # Find which option matches the given card on this rule
         for i, option in enumerate(trial.options, 1):
-            option_attrs = self._parse_card_attrs(option)
-            if option_attrs.get(rule) == target_value:
+            option_attrs = self._parse_card_description(option)
+            if option_attrs.get(attr_key) == target_value:
                 return i
         
         return None
@@ -484,11 +509,11 @@ class WCSTEnv(CognitiveEnv):
         trial = self._current_trial
         if trial is None:
             return ""
-        
+
         # Generate image for image mode
         if self.image_mode:
             self._generate_image()
-            
+
             if self.image_only:
                 # Just return feedback and image indication
                 return f"{self._feedback}[Image: {self._current_image_path}]\nSelect option 1-4.".strip()
@@ -498,29 +523,33 @@ class WCSTEnv(CognitiveEnv):
                 if self.hint:
                     obs += f"\nRule: {trial.rule}"
                 return obs.strip()
-        
+
         if self.variant == "empty":
             obs = f"{self._feedback}Options:\n1.\n2.\n3.\n4."
         else:
             obs = f"{self._feedback}Given: {trial.given}\nOptions:\n"
             for i, opt in enumerate(trial.options, 1):
                 obs += f"{i}. {opt}\n"
-        
+
         if self.hint:
             obs += f"\nRule: {trial.rule}"
-        
+
         return obs.strip()
-    
+
     def parse_action(self, response: str) -> Tuple[Optional[int], ActionStatus]:
-        """Parse the model's response to extract the chosen option."""
+        """Parse the model's response to extract the chosen option (1-4).
+
+        Returns:
+            (answer_int or None, ActionStatus): Status indicates format validity and range.
+        """
         # Look for answer in <answer> tags
         match = re.search(r"<answer>(?s:.*?)</answer>", response)
-        
+
         if match is None:
             return None, ActionStatus.INVALID_FORMAT
-        
+
         answer_text = re.sub(r"<answer>|</answer>", "", match[0]).strip()
-        
+
         try:
             answer = int(answer_text)
             if 1 <= answer <= 4:
@@ -529,14 +558,14 @@ class WCSTEnv(CognitiveEnv):
                 return None, ActionStatus.INVALID_ACTION
         except ValueError:
             return None, ActionStatus.INVALID_FORMAT
-    
+
     def step(self, action: str) -> StepResult:
         """
         Take a step in the environment.
-        
+
         Args:
             action: The model's response string
-            
+
         Returns:
             StepResult with observation, reward, done, and info
         """
@@ -546,26 +575,26 @@ class WCSTEnv(CognitiveEnv):
                 reward=0.0,
                 done=True,
                 info={"error": "Episode already finished"},
-                truncated=False
+                truncated=False,
             )
-        
+
         if self._current_trial is None:
             return StepResult(
                 observation="",
                 reward=0.0,
                 done=True,
                 info={"error": "No trial available"},
-                truncated=False
+                truncated=False,
             )
-        
+
         trial = self._current_trial  # Local reference for type checker
-        
+
         self._n_trials += 1
         self.step_count += 1
-        
+
         # Parse the action
         parsed_action, status = self.parse_action(action)
-        
+
         # Prepare step info
         step_info = {
             "trial_num": self._n_trials,
@@ -575,40 +604,40 @@ class WCSTEnv(CognitiveEnv):
             "raw_response": action,
             "status": status.value,
         }
-        
+
         if trial.is_ambiguous is not None:
             step_info["is_ambiguous"] = trial.is_ambiguous
-        
+
         # Handle invalid format
         if status == ActionStatus.INVALID_FORMAT:
             self._feedback = 'Answer not found. Please state your final answer using the template: "<answer>your answer</answer>"\n'
             self._consecutive_correct = 0
-            
+
             step_info["correct"] = False
             self.history.append(step_info)
-            
+
             return StepResult(
                 observation=self._format_observation(),
                 reward=REWARD_INVALID_FORMAT,
                 done=False,
-                info=step_info
+                info=step_info,
             )
-        
+
         # Handle invalid action (number out of range)
         if status == ActionStatus.INVALID_ACTION:
             self._feedback = "Please answer with a number between 1 and 4.\n"
             self._consecutive_correct = 0
-            
+
             step_info["correct"] = False
             self.history.append(step_info)
-            
+
             return StepResult(
                 observation=self._format_observation(),
                 reward=REWARD_INVALID_ACTION,
                 done=False,
-                info=step_info
+                info=step_info,
             )
-        
+
         # Check if answer is correct
         correct = parsed_action == trial.correct_idx
         step_info["correct"] = correct
@@ -616,16 +645,26 @@ class WCSTEnv(CognitiveEnv):
         # WCST-specific error detection
         is_perseverative = False
         is_failure_to_maintain = False
+        is_repeat = False
         
-        # Capture and clear first-after-rule-change flag BEFORE processing
+        # Capture and clear first-after-rule-change flag at the START of processing
         is_first_after_rule_change = self._first_after_rule_change
         self._first_after_rule_change = False
+        
+        # Check if this is a repeated option guess (before updating seen_options)
+        if parsed_action is not None and parsed_action in self._seen_options_this_rule:
+            is_repeat = True
         
         if correct:
             self._feedback = "Correct!\n"
             self._consecutive_correct += 1
             self._total_correct += 1
             reward = REWARD_CORRECT
+            
+            # Mark rule as known on first correct
+            self._rule_known = True
+            # Reset seen options on correct (fresh exploration context)
+            self._seen_options_this_rule = set()
             
             # Track conceptual response (3+ consecutive correct)
             if self._consecutive_correct >= 3:
@@ -646,9 +685,17 @@ class WCSTEnv(CognitiveEnv):
                 if self._current_rule_idx >= len(self.rules):
                     self._current_rule_idx = 0
                     self._rule_cycle += 1
+                    
+                # Rule changed: reset for fresh discovery phase on new rule
+                self._rule_known = False
+                self._seen_options_this_rule = set()
         else:
             # Error - check for WCST-specific error types
             reward = REWARD_INCORRECT
+            
+            # Track this option as seen (for repeat detection)
+            if parsed_action is not None:
+                self._seen_options_this_rule.add(parsed_action)
             
             # Failure to Maintain Set: error after achieving conceptual level (3+ correct)
             if self._consecutive_correct >= 3:
@@ -669,53 +716,77 @@ class WCSTEnv(CognitiveEnv):
                     self._perseverative_errors += 1
                     reward += REWARD_PERSEVERATIVE_ERROR
             
+            # Repeat penalty: choosing same option again within current rule cycle
+            if is_repeat:
+                reward += self.repeat_penalty
+            
+            # Perseveration penalty (rule known but wrong): model should know the rule
+            if self._rule_known and not is_first_after_rule_change:
+                reward += self.perseveration_penalty
+            
             self._feedback = "Incorrect. Please try again.\n"
             self._consecutive_correct = 0
         
-        # Store last response for potential future use
+        # Store last response
         self._last_response = parsed_action
         
         # Add error type info to step_info
         step_info["is_perseverative_error"] = is_perseverative
         step_info["is_failure_to_maintain"] = is_failure_to_maintain
+        step_info["is_repeat"] = is_repeat
+        step_info["reward"] = reward
         
         self.history.append(step_info)
         
         # Check termination conditions
         done = False
         truncated = False
-        
+
         if self._n_trials >= self.max_trials:
             done = True
-            truncated = True
+            truncated = True  # Truncated (not natural termination) if trial limit hit
         elif self._rule_cycle >= 2:  # Completed 2 full cycles
             done = True
-        
+
         self._done = done
-        
+
         # Generate next trial if not done
         if not done:
             self._current_trial = self._generate_trial()
-        
+
         return StepResult(
             observation=self._format_observation() if not done else "",
             reward=reward,
             done=done,
             info=step_info,
-            truncated=truncated
+            truncated=truncated,
         )
-    
+
     def _get_internal_state(self) -> Dict[str, Any]:
         """Get internal state for serialization."""
         return {
-            "current_trial": {
-                "given": self._current_trial.given if self._current_trial else None,
-                "options": self._current_trial.options if self._current_trial else None,
-                "correct_idx": self._current_trial.correct_idx if self._current_trial else None,
-                "rule": self._current_trial.rule if self._current_trial else None,
-                "is_ambiguous": self._current_trial.is_ambiguous if self._current_trial else None,
-                "given_attrs": self._current_trial.given_attrs if self._current_trial else None,
-            } if self._current_trial else None,
+            "current_trial": (
+                {
+                    "given": self._current_trial.given if self._current_trial else None,
+                    "options": (
+                        self._current_trial.options if self._current_trial else None
+                    ),
+                    "correct_idx": (
+                        self._current_trial.correct_idx if self._current_trial else None
+                    ),
+                    "rule": self._current_trial.rule if self._current_trial else None,
+                    "is_ambiguous": (
+                        self._current_trial.is_ambiguous
+                        if self._current_trial
+                        else None
+                    ),
+                    "given_attrs": (
+                        self._current_trial.given_attrs if self._current_trial else None
+                    ),
+                }
+                if self._current_trial
+                else None
+            ),
             "current_rule_idx": self._current_rule_idx,
             "consecutive_correct": self._consecutive_correct,
             "completed_categories": self._completed_categories,
@@ -732,8 +803,10 @@ class WCSTEnv(CognitiveEnv):
             "failure_to_maintain_set": self._failure_to_maintain_set,
             "conceptual_responses": self._conceptual_responses,
             "first_after_rule_change": self._first_after_rule_change,
+            "rule_known": self._rule_known,
+            "seen_options_this_rule": list(self._seen_options_this_rule),
         }
-    
+
     def _set_internal_state(self, state: Dict[str, Any]) -> None:
         """Restore internal state."""
         trial_data = state.get("current_trial")
@@ -748,7 +821,7 @@ class WCSTEnv(CognitiveEnv):
             )
         else:
             self._current_trial = None
-        
+
         self._current_rule_idx = state.get("current_rule_idx", 0)
         self._consecutive_correct = state.get("consecutive_correct", 0)
         self._completed_categories = state.get("completed_categories", 0)
@@ -765,11 +838,22 @@ class WCSTEnv(CognitiveEnv):
         self._failure_to_maintain_set = state.get("failure_to_maintain_set", 0)
         self._conceptual_responses = state.get("conceptual_responses", 0)
         self._first_after_rule_change = state.get("first_after_rule_change", False)
+        self._rule_known = state.get("rule_known", False)
+        self._seen_options_this_rule = set(state.get("seen_options_this_rule", []))
     
     def compute_episode_reward(self) -> float:
-        """Compute total episode reward."""
+        """Compute cumulative episode reward from all steps.
+
+        Sums explicit reward from each step, falling back to legacy rewards
+        if explicit reward not recorded (should not occur with current implementation).
+        """
         total = 0.0
         for step in self.history:
+            # Prefer explicit reward if recorded
+            if "reward" in step:
+                total += float(step["reward"])
+                continue
+            # Fallback to legacy aggregation
             if step.get("status") == ActionStatus.INVALID_FORMAT.value:
                 total += REWARD_INVALID_FORMAT
             elif step.get("status") == ActionStatus.INVALID_ACTION.value:
@@ -785,17 +869,26 @@ class WCSTEnv(CognitiveEnv):
                 if step.get("is_failure_to_maintain"):
                     total += REWARD_FAILURE_TO_MAINTAIN
         return total
-    
+
     def get_metrics(self) -> Dict[str, Any]:
-        """Get evaluation metrics."""
+        """Get episode evaluation metrics.
+
+        Returns:
+            Dict with: total_trials, valid_trials, correct_trials, accuracy,
+            completed_categories, rule_cycles_completed, episode_reward,
+            and WCST-specific error metrics
+        """
         total_trials = len(self.history)
-        valid_trials = sum(1 for s in self.history if s.get("status") == ActionStatus.VALID.value)
+        valid_trials = sum(
+            1 for s in self.history if s.get("status") == ActionStatus.VALID.value
+        )
         correct_trials = sum(1 for s in self.history if s.get("correct"))
         total_errors = valid_trials - correct_trials
         
         # Calculate WCST-specific metrics from history
         perseverative_errors = sum(1 for s in self.history if s.get("is_perseverative_error"))
         failure_to_maintain_set = sum(1 for s in self.history if s.get("is_failure_to_maintain"))
+        repeat_errors = sum(1 for s in self.history if s.get("is_repeat"))
         
         return {
             "total_trials": total_trials,
@@ -808,6 +901,7 @@ class WCSTEnv(CognitiveEnv):
             "total_errors": total_errors,
             "perseverative_errors": perseverative_errors,
             "failure_to_maintain_set": failure_to_maintain_set,
+            "repeat_errors": repeat_errors,
             "perseverative_error_rate": perseverative_errors / total_errors if total_errors > 0 else 0.0,
             "conceptual_responses": self._conceptual_responses,
             "episode_reward": self.compute_episode_reward(),
