@@ -47,17 +47,15 @@ class RAPMEnv(CognitiveEnv):
     """
     Raven's Progressive Matrices environment for RL training.
     
-    Unlike WCST/SWM, RAPM is typically evaluated as single-shot questions.
-    This environment supports:
-    - Single question mode: One question per episode
-    - Dataset mode: Iterate through a dataset of questions
+    Multi-turn environment with constraint-based feedback and progressive penalties.
     
-    Reward structure:
-    - +1.0 for correct answer
-    - 0.0 for incorrect answer
-    - -0.5 for invalid format
+    Reward structures by mode:
+    - Image-MC: Max 8 turns, -0.1 per wrong answer, +1.0 for correct
+    - Text-MC/Gen: Max turns = # of constraints, -0.1 × violations per wrong answer,
+      -1.0 if max turns reached, +1.0 for correct
+    - Invalid format: -0.5 penalty, max 3 retries
     
-    Episode ends after one valid attempt per question.
+    Episode ends when correct answer found or max turns/retries reached.
     """
     
     # System prompts
@@ -497,52 +495,39 @@ class RAPMEnv(CognitiveEnv):
                         info=step_info
                     )
         
-        # Multi-turn mode for image-mc
-        elif is_multiturn:
-            if is_correct:
-                # Correct answer - episode ends with positive reward
-                reward = REWARD_CORRECT
-                self._done = True
-                self._answered = True
-                return StepResult(
-                    observation="",
-                    reward=reward,
-                    done=True,
-                    info=step_info
-                )
-            else:
-                # Wrong answer - check if max turns reached
-                reward = REWARD_WRONG_MULTITURN
-                if self._attempts >= self.max_turns:
-                    # Max turns reached - episode ends
-                    self._done = True
-                    return StepResult(
-                        observation="",
-                        reward=reward,
-                        done=True,
-                        info=step_info,
-                        truncated=True
-                    )
-                else:
-                    # Continue with feedback
-                    return StepResult(
-                        observation="Incorrect. Try again.",
-                        reward=reward,
-                        done=False,
-                        info=step_info
-                    )
-        else:
-            # Single-turn mode for other configurations
-            reward = REWARD_CORRECT if is_correct else REWARD_INCORRECT
+        # Multi-turn mode for image-mc (or fallback for any other configuration)
+        if is_correct:
+            # Correct answer - episode ends with positive reward
+            reward = REWARD_CORRECT
             self._done = True
             self._answered = True
-            
             return StepResult(
                 observation="",
                 reward=reward,
                 done=True,
                 info=step_info
             )
+        else:
+            # Wrong answer - check if max turns reached
+            reward = REWARD_WRONG_MULTITURN
+            if self._attempts >= self.max_turns:
+                # Max turns reached - episode ends
+                self._done = True
+                return StepResult(
+                    observation="",
+                    reward=reward,
+                    done=True,
+                    info=step_info,
+                    truncated=True
+                )
+            else:
+                # Continue with feedback
+                return StepResult(
+                    observation="Incorrect. Try again.",
+                    reward=reward,
+                    done=False,
+                    info=step_info
+                )
     
     def _check_answer(self, predicted: Any) -> bool:
         """Check if the predicted answer is correct."""
