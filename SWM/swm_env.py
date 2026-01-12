@@ -51,10 +51,12 @@ class SWMEnv(CognitiveEnv):
     
     Reward structure:
     - +1.0 for finding a token
-    - +0.1 for valid guess (not repeated, legal box)
-    - -0.1 for repeated box in current search
-    - -0.2 for illegal box (already had token of all types)
-    - -0.5 for invalid format
+    - 0.0 for valid guess (not repeated, legal box)
+    - -0.5 for repeated box in current search
+    - -0.5 for illegal box (already had token of all types)
+    - -1.0 for invalid coordinate (image mode)
+    - -1.0 for invalid format
+    - -1.0 for invalid action (text mode)
     
     Episode ends when:
     - All tokens found n_boxes times each
@@ -95,12 +97,12 @@ class SWMEnv(CognitiveEnv):
             image_only: If True, only return image path without text feedback
             seed: Random seed for reproducibility
             reward_token_found: Reward for finding a token (default: 1.0)
-            reward_valid_guess: Reward for valid guess - not repeated, legal box (default: 0.1)
-            reward_repeated_box: Penalty for opening same box again in current search (default: -0.1)
-            reward_illegal_box: Penalty for box that can't contain any more tokens (default: -0.2)
-            reward_no_box: Penalty for coordinate that doesn't match any box - image mode (default: -0.3)
-            reward_invalid_format: Penalty for unparseable answer (default: -0.5)
-            reward_invalid_action: Penalty for box number out of range (default: -0.5)
+            reward_valid_guess: Reward for valid guess - not repeated, legal box (default: 0.0)
+            reward_repeated_box: Penalty for opening same box again in current search (default: -0.5)
+            reward_illegal_box: Penalty for box that can't contain any more tokens (default: -0.5)
+            reward_no_box: Penalty for coordinate that doesn't match any box - image mode (default: -1.0)
+            reward_invalid_format: Penalty for unparseable answer (default: -1.0)
+            reward_invalid_action: Penalty for box number out of range (default: -1.0)
         """
         super().__init__(seed=seed)
         
@@ -298,8 +300,11 @@ Your final answer should be a box number, wrapped with <answer> and </answer>"""
     
     def _regenerate_image(self) -> None:
         """
-        Reset the SWM image after tokens are found and moved.
-        This resets the image to show all boxes closed (base state).
+        Regenerate the SWM image after tokens are found and repositioned.
+        
+        Resets the image display to show all boxes in closed (base) state after
+        token discovery, preparing for the next search phase with regenerated
+        token positions.
         """
         if self._swm_image is None or self._state is None:
             return
@@ -312,14 +317,19 @@ Your final answer should be a box number, wrapped with <answer> and </answer>"""
     
     def parse_action(self, response: str) -> Tuple[Optional[int], ActionStatus]:
         """
-        Parse the model's response to extract the chosen box.
+        Parse the model's response to extract the chosen box ID.
         
         For text mode: expects a box number (1 to n_boxes)
         For image mode: expects coordinates (x, y) which are converted to box ID
         
+        Special handling:
+        - INVALID_FORMAT: Missing <answer> tags or unparseable content
+        - INVALID_ACTION: Box number out of valid range (text mode)
+        - NOBOX: Coordinate doesn't match any box in grid (image mode)
+        
         Returns:
-            Tuple of (box_id or None, status)
-            For image mode, also sets self._last_chosen_coord for feedback
+            Tuple of (box_id or None, ActionStatus)
+            For image mode, also sets self._last_chosen_coord for feedback generation
         """
         match = re.search(r"<answer>(?s:.*?)</answer>", response)
         
@@ -361,13 +371,21 @@ Your final answer should be a box number, wrapped with <answer> and </answer>"""
     
     def step(self, action: str) -> StepResult:
         """
-        Take a step in the environment.
+        Take a step in the environment by processing the model's box selection.
+        
+        Handles:
+        - Parsing and validating the chosen box/coordinate
+        - Detecting if a token was found in the selected box
+        - Checking for legal/illegal and repeated box selections
+        - Regenerating tokens in new locations after discovery
+        - Updating visual feedback (image mode)
         
         Args:
-            action: The model's response string
+            action: The model's response string containing <answer>choice</answer>
             
         Returns:
-            StepResult with observation, reward, done, and info
+            StepResult with observation (formatted feedback or empty string), 
+            accumulated reward, done flag, and detailed step info
         """
         if self._done:
             return StepResult(
@@ -580,7 +598,16 @@ Your final answer should be a box number, wrapped with <answer> and </answer>"""
         self._feedback = state.get("feedback", "")
     
     def compute_episode_reward(self) -> float:
-        """Compute total episode reward."""
+        """Compute total episode reward by summing rewards from all steps.
+        
+        Accounts for:
+        - Token discovery rewards (1.0 per token found)
+        - Valid guess rewards (0.0 per valid attempt)
+        - Penalties for invalid format, invalid action, and no-box errors
+        
+        Returns:
+            Total accumulated reward for the episode.
+        """
         total = 0.0
         for step in self.history:
             if step.get("status") == ActionStatus.INVALID_FORMAT.value:
@@ -597,7 +624,22 @@ Your final answer should be a box number, wrapped with <answer> and </answer>"""
         return total
     
     def get_metrics(self) -> Dict[str, Any]:
-        """Get evaluation metrics."""
+        """Get evaluation metrics for the episode.
+        
+        Returns:
+            Dict containing:
+            - total_guesses: Total number of box selections made
+            - tokens_found: Number of tokens discovered
+            - tokens_to_find: Total tokens needed (n_boxes * n_tokens)
+            - completion_rate: Tokens found / tokens to find
+            - error_rate: (illegal + repeated) / valid guesses
+            - illegal_count: Number of selections of boxes with all token types
+            - repeated_count: Number of repeated box selections in current search
+            - invalid_count: Number of invalid format/action responses
+            - valid_count: Number of valid box selections
+            - efficiency: Tokens found / total guesses
+            - score: Traditional SWM score (1 - error_rate)
+        """
         total_guesses = self._n_guesses
         tokens_to_find = self.n_boxes * self.n_tokens
         tokens_found = self._stats.get("tokens_found", 0)
