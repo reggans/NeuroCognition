@@ -38,6 +38,7 @@ REWARD_INVALID_CHOICE = -1.0
 REWARD_PERSEVERATIVE_ERROR = -0.5
 REWARD_FAILURE_TO_MAINTAIN_SET = -0.5
 REWARD_REPEATED = -1.0
+RULE_CHANGE_THRESHOLD = 5  # Align with wcst_env num_correct default
 
 ANSWER_TAG_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)
 
@@ -346,13 +347,13 @@ Your final answer should be 1, 2, 3, or 4 (the index of the matching option), wr
             if prev_rule is not None and prev_rule != trial.rule:
                 # Rule changed; check if still using old rule
                 consecutive_correct = state.get("consecutive_correct_before_change", 0)
-                if consecutive_correct >= 10:
+                if consecutive_correct >= RULE_CHANGE_THRESHOLD:
                     # Likely perseverative error
                     return REWARD_PERSEVERATIVE_ERROR
 
-            # Check for failure to maintain set
+            # Check for failure to maintain set (error after 2+ correct)
             consecutive_correct = state.get("consecutive_correct", 0)
-            if consecutive_correct >= 5 and consecutive_correct < 10:
+            if consecutive_correct >= 2:
                 # Had streak but failed before completing category
                 return REWARD_FAILURE_TO_MAINTAIN_SET
 
@@ -437,8 +438,8 @@ Your final answer should be 1, 2, 3, or 4 (the index of the matching option), wr
             if is_correct:
                 state["consecutive_correct"] = state.get("consecutive_correct", 0) + 1
 
-                # Check if completed category (10 consecutive correct)
-                if state["consecutive_correct"] >= 10:
+                # Check if completed category (threshold matches wcst_env)
+                if state["consecutive_correct"] >= RULE_CHANGE_THRESHOLD:
                     state["completed_categories"] = (
                         state.get("completed_categories", 0) + 1
                     )
@@ -450,7 +451,7 @@ Your final answer should be 1, 2, 3, or 4 (the index of the matching option), wr
                         state["rule_cycle"] = state.get("rule_cycle", 0) + 1
                         state["current_rule_idx"] = 0
 
-                    state["consecutive_correct_before_change"] = 10
+                    state["consecutive_correct_before_change"] = RULE_CHANGE_THRESHOLD
                     state["prev_rule"] = trial.rule
 
                     feedback = "Correct! The rule has changed. Continue matching."
@@ -464,7 +465,7 @@ Your final answer should be 1, 2, 3, or 4 (the index of the matching option), wr
             else:
                 # Check for perseverative error
                 consecutive_correct = state.get("consecutive_correct", 0)
-                if consecutive_correct >= 5 and consecutive_correct < 10:
+                if consecutive_correct >= 2:
                     state["failure_to_maintain_set"] = (
                         state.get("failure_to_maintain_set", 0) + 1
                     )
@@ -474,7 +475,7 @@ Your final answer should be 1, 2, 3, or 4 (the index of the matching option), wr
                     consecutive_before_change = state.get(
                         "consecutive_correct_before_change", 0
                     )
-                    if consecutive_before_change >= 10:
+                    if consecutive_before_change >= RULE_CHANGE_THRESHOLD:
                         state["perseverative_errors"] = (
                             state.get("perseverative_errors", 0) + 1
                         )
@@ -539,7 +540,7 @@ Your final answer should be 1, 2, 3, or 4 (the index of the matching option), wr
                 prev_rule is not None
                 and current_rule is not None
                 and prev_rule != current_rule
-                and consecutive_before_change >= 10
+                and consecutive_before_change >= RULE_CHANGE_THRESHOLD
             ):
                 is_persev = True
 
