@@ -50,7 +50,8 @@ class RAPMEnv(CognitiveEnv):
     Multi-turn environment with constraint-based feedback and progressive penalties.
     
     Reward structures by mode:
-    - Image-MC: Max 8 turns, -0.1 per wrong answer, +1.0 for correct
+        - Image-MC: Max 8 turns, -0.1 per wrong answer, +1.0 for correct,
+            and -1.0 final penalty if max turns reached without a correct answer
     - Text-MC/Gen: Max turns = # of constraints, -0.1 × violations per wrong answer,
       -1.0 if max turns reached, +1.0 for correct
     - Invalid format: -0.5 penalty, max 3 retries
@@ -512,6 +513,7 @@ class RAPMEnv(CognitiveEnv):
             reward = REWARD_WRONG_MULTITURN
             if self._attempts >= self.max_turns:
                 # Max turns reached - episode ends
+                reward = REWARD_MAX_TURNS_FAILED
                 self._done = True
                 return StepResult(
                     observation="",
@@ -645,7 +647,11 @@ class RAPMEnv(CognitiveEnv):
                         total += REWARD_CONSTRAINT_VIOLATION * violations
                 # Image-mc: fixed penalty
                 elif is_multiturn_image:
-                    total += REWARD_WRONG_MULTITURN
+                    # For image-mc, apply -1.0 if episode ended due to max turns; otherwise -0.1 per wrong turn
+                    if i == len(self.history) - 1 and self._done:
+                        total += REWARD_MAX_TURNS_FAILED
+                    else:
+                        total += REWARD_WRONG_MULTITURN
                 # Single-turn: no penalty
                 else:
                     total += REWARD_INCORRECT
