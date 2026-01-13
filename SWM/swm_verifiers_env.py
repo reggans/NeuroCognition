@@ -25,6 +25,8 @@ try:
 except ImportError:
     vf = None  # type: ignore
 
+from SWM.swm_rubric import SWMRubric
+
 # Reward constants (matching swm_env.py)
 REWARD_TOKEN_FOUND = 1.0
 REWARD_VALID_GUESS = 0.0
@@ -237,6 +239,7 @@ Your final answer should be a box number, wrapped with <answer> and </answer>"""
             state["n_boxes"] = info.get("n_boxes", 8)
             state["n_tokens"] = info.get("n_tokens", 1)
             state["n_guesses"] = 0
+            state["error_count"] = 0  # Track errors for outcome reward
             state["max_guesses"] = state["n_boxes"] ** 2
             return state
 
@@ -274,6 +277,7 @@ Your final answer should be a box number, wrapped with <answer> and </answer>"""
             state["n_guesses"] = state.get("n_guesses", 0) + 1
 
             if status != "valid" or box_id is None:
+                state["error_count"] = state.get("error_count", 0) + 1
                 if status == "invalid_format":
                     feedback = f"Please answer with a box number between 1 and {n_boxes} inside <answer> tags."
                 else:
@@ -282,6 +286,7 @@ Your final answer should be a box number, wrapped with <answer> and </answer>"""
 
             # Check if repeated
             if box_id in opened_boxes:
+                state["error_count"] = state.get("error_count", 0) + 1
                 feedback = f"You already opened box {box_id} in this search. Try a different box."
                 return [{"role": "user", "content": feedback}]
 
@@ -297,6 +302,7 @@ Your final answer should be a box number, wrapped with <answer> and </answer>"""
                     break
 
             if is_illegal:
+                state["error_count"] = state.get("error_count", 0) + 1
                 feedback = (
                     f"Box {box_id} cannot contain any more tokens. Try a different box."
                 )
@@ -344,6 +350,64 @@ Your final answer should be a box number, wrapped with <answer> and </answer>"""
 
             return [{"role": "user", "content": feedback}]
 
+        def get_rubric(self):
+            """Return the rubric instance for this environment."""
+            return self._swm_rubric
+
+        def compute_reward_with_state(
+            self, completions: List[List[dict]], state: vf.State
+        ) -> List[float]:
+            """
+            Compute turn-level and outcome-level rewards using current state information.
+            This method passes state to the rubric for accurate reward calculation.
+            """
+            rubric = self.get_rubric()
+
+            # Prepare kwargs with state information (for both turn and outcome rewards)
+            reward_kwargs = {
+                "opened_boxes": state.get("opened_boxes", set()),
+                "legal_boxes": state.get("legal_boxes", {}),
+                "token_box": state.get("token_box", {}),
+                "n_boxes": state.get("n_boxes", 8),
+                "n_tokens": state.get("n_tokens", 1),
+                "mode": "text",
+                "box_coords": None,
+                # Final state for outcome rewards
+                "found_tokens": state.get("found_tokens", []),
+                "n_guesses": state.get("n_guesses", 0),
+                "error_count": state.get("error_count", 0),
+            }
+
+            # Compute turn-level rewards with state
+            turn_rewards = []
+            for func in rubric.turn_reward_funcs:
+                rewards_list = func(completions, [""], **reward_kwargs)
+                turn_rewards.append(rewards_list)
+
+            # Sum turn-level rewards for each completion
+            total_turn_rewards = [
+                sum(r[i] for r in turn_rewards) for i in range(len(completions))
+            ]
+
+            # Compute outcome-level rewards with state (only at episode end)
+            total_outcome_rewards = [0.0] * len(completions)
+            for func in rubric.outcome_reward_funcs:
+                outcome_rewards_list = func(completions, [""], **reward_kwargs)
+                for i in range(len(completions)):
+                    total_outcome_rewards[i] += outcome_rewards_list[i]
+
+            # Combine turn and outcome rewards
+            total_rewards = [
+                total_turn_rewards[i] + total_outcome_rewards[i]
+                for i in range(len(completions))
+            ]
+            return total_rewards
+
+    # Create rubric instance
+    swm_rubric = SWMRubric(
+        n_boxes=kwargs.get("n_boxes", 8), n_tokens=kwargs.get("n_tokens", 1), mode=mode
+    )
+
     env = SWMVerifiersEnv(
         dataset=dataset,
         system_prompt=system_prompt,
@@ -351,4 +415,5 @@ Your final answer should be a box number, wrapped with <answer> and </answer>"""
         rubric=rubric,
         **kwargs,
     )
+    env._swm_rubric = swm_rubric
     return env
