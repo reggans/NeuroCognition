@@ -24,6 +24,7 @@ from WCST.utils import (
     string_generator,
     wcst_generator,
 )
+from WCST.wcst_rubric import WCSTRubric
 
 try:
     import verifiers as vf
@@ -494,6 +495,112 @@ Your final answer should be 1, 2, 3, or 4 (the index of the matching option), wr
 
             return [{"role": "user", "content": feedback}]
 
+        def get_rubric(self):
+            """Return the rubric instance for this environment."""
+            return self._wcst_rubric
+
+        def compute_reward_with_state(
+            self, completions: List[List[dict]], state: vf.State
+        ) -> List[float]:
+            """Compute turn + outcome rewards using rubric with state context."""
+            rubric = self.get_rubric()
+
+            info = state.get("info", {})
+            trials = info.get("trials", [])
+            trial_idx = state.get("trial_idx", 0)
+
+            # Prepare per-example correct answers
+            if 0 <= trial_idx < len(trials):
+                correct = trials[trial_idx].get("correct") or trials[trial_idx].get(
+                    "correct_idx", None
+                )
+            else:
+                correct = None
+            correct_answers = [correct] * len(completions)
+
+            # State for repeat detection
+            prev_choices = state.get("prev_choices_in_trial", [])
+            seen_options = prev_choices  # reuse for repeat checks
+
+            # Flags/metrics
+            consecutive_correct = state.get("consecutive_correct", 0)
+            prev_rule = state.get("prev_rule", None)
+            consecutive_before_change = state.get(
+                "consecutive_correct_before_change", 0
+            )
+            # Determine current rule
+            current_rule = (
+                trials[trial_idx]["rule"] if 0 <= trial_idx < len(trials) else None
+            )
+
+            # Perseverative flag mirrors verifiers compute_reward logic
+            is_persev = False
+            if (
+                prev_rule is not None
+                and current_rule is not None
+                and prev_rule != current_rule
+                and consecutive_before_change >= 10
+            ):
+                is_persev = True
+
+            # Failure-to-maintain flag: we align to env logic (>=2 before error)
+            is_failure = consecutive_correct >= 2
+
+            reward_kwargs = {
+                "correct_answers": correct_answers,
+                "prev_choices_in_trial": (
+                    [prev_choices] * len(completions)
+                    if isinstance(prev_choices, list)
+                    and prev_choices
+                    and not isinstance(prev_choices[0], list)
+                    else prev_choices
+                ),
+                "seen_options": (
+                    [seen_options] * len(completions)
+                    if isinstance(seen_options, list)
+                    and seen_options
+                    and not isinstance(seen_options[0], list)
+                    else seen_options
+                ),
+                "consecutive_correct": (
+                    [consecutive_correct] * len(completions)
+                    if not isinstance(consecutive_correct, list)
+                    else consecutive_correct
+                ),
+                "is_perseverative_error": [is_persev] * len(completions),
+                "is_failure_to_maintain": [is_failure] * len(completions),
+            }
+
+            # Turn-level rewards
+            turn_rewards = []
+            for func in rubric.turn_reward_funcs:
+                turn_rewards.append(func(completions, correct_answers, **reward_kwargs))
+
+            total_turn = [
+                sum(r[i] for r in turn_rewards) for i in range(len(completions))
+            ]
+
+            # Outcome rewards (use final state counters)
+            outcome_kwargs = {
+                "completed_categories": state.get("completed_categories", 0),
+                "rules": info.get("rules", []),
+                "num_rules": len(info.get("rules", [])),
+                "perseverative_errors": state.get("perseverative_errors", 0),
+                "failure_to_maintain_set": state.get("failure_to_maintain_set", 0),
+                "n_trials": state.get("trial_idx", 0),
+            }
+
+            outcome_rewards = [0.0] * len(completions)
+            for func in rubric.outcome_reward_funcs:
+                o = func(completions, correct_answers, **outcome_kwargs)
+                for i in range(len(completions)):
+                    outcome_rewards[i] += o[i]
+
+            return [total_turn[i] + outcome_rewards[i] for i in range(len(completions))]
+
+    # Create rubric instance
+    wcst_rubric = WCSTRubric()
+
     env = WCSTVerifiersEnv(
         dataset=dataset,
         system_prompt=system_prompt,
@@ -501,4 +608,5 @@ Your final answer should be 1, 2, 3, or 4 (the index of the matching option), wr
         rubric=rubric,
         **kwargs,
     )
+    env._wcst_rubric = wcst_rubric
     return env
