@@ -33,6 +33,8 @@ except ImportError:
     cell_satisfies = None
     constraint_violations = None
 
+from RAPM.rapm_rubric import RAPMRubric
+
 # Reward constants (matching rapm_env.py)
 REWARD_CORRECT = 1.0
 REWARD_WRONG_MULTITURN = -0.1
@@ -505,6 +507,57 @@ def load_environment(
                 return []
             return [{"role": "user", "content": feedback}]
 
+        def get_rubric(self):
+            """Return the rubric instance for this environment."""
+            return self._rapm_rubric
+
+        def compute_reward_with_state(
+            self, completions: List[List[dict]], state: vf.State
+        ) -> List[float]:
+            """Compute rewards using rubric with current state context.
+
+            Passes mode, answer_mode, max_turns, cell_constraint, gold_answer,
+            and attempts to the rubric for proper reward computation.
+            """
+            rubric = self.get_rubric()
+
+            info = state.get("info", {})
+            mode = info.get("mode", "image")
+            answer_mode = info.get("answer_mode", "mc")
+            max_turns = info.get("max_turns", 8)
+            cell_constraint = info.get("cell_constraint")
+            gold_answer = state.get("answer")
+            attempts = len(state.get("trajectory", []))
+
+            # Prepare kwargs for rubric functions
+            reward_kwargs = {
+                "mode": mode,
+                "answer_mode": answer_mode,
+                "max_turns": max_turns,
+                "cell_constraint": cell_constraint,
+                "attempts": attempts,
+            }
+
+            # Compute turn-level rewards
+            turn_rewards = []
+            for func in rubric.turn_reward_funcs:
+                turn_rewards.append(func(completions, [gold_answer] * len(completions), **reward_kwargs))
+            
+            total_turn = [sum(r[i] for r in turn_rewards) for i in range(len(completions))]
+
+            # Compute outcome-level rewards
+            outcome_rewards = [0.0] * len(completions)
+            for func in rubric.outcome_reward_funcs:
+                o = func(completions, [gold_answer] * len(completions), **reward_kwargs)
+                for i in range(len(completions)):
+                    outcome_rewards[i] += o[i]
+
+            # Return total rewards
+            return [total_turn[i] + outcome_rewards[i] for i in range(len(completions))]
+
+    # Create rubric instance with correct mode/answer_mode from parameters
+    rapm_rubric = RAPMRubric(mode=mode, answer_mode=answer_mode)
+
     env = RAPMVerifiersEnv(
         dataset=dataset,
         system_prompt=system_prompt,
@@ -512,4 +565,5 @@ def load_environment(
         rubric=rubric,
         **kwargs,
     )
+    env._rapm_rubric = rapm_rubric
     return env
