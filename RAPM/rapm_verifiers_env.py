@@ -541,9 +541,13 @@ def load_environment(
             # Compute turn-level rewards
             turn_rewards = []
             for func in rubric.turn_reward_funcs:
-                turn_rewards.append(func(completions, [gold_answer] * len(completions), **reward_kwargs))
-            
-            total_turn = [sum(r[i] for r in turn_rewards) for i in range(len(completions))]
+                turn_rewards.append(
+                    func(completions, [gold_answer] * len(completions), **reward_kwargs)
+                )
+
+            total_turn = [
+                sum(r[i] for r in turn_rewards) for i in range(len(completions))
+            ]
 
             # Compute outcome-level rewards
             outcome_rewards = [0.0] * len(completions)
