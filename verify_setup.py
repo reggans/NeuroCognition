@@ -87,10 +87,7 @@ def main():
             "RAPM Text Validator",
         ),
         (
-            PROJECT_ROOT
-            / "RAPM"
-            / "text_rapm"
-            / "per_cell_constraints.py",
+            PROJECT_ROOT / "RAPM" / "text_rapm" / "per_cell_constraints.py",
             "RAPM Constraints",
         ),
     ]
