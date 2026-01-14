@@ -85,6 +85,12 @@ def main():
     parser.add_argument(
         "--seed", type=int, default=42, help="Random seed (default: 42)"
     )
+    parser.add_argument(
+        "--vllm_server_url",
+        type=str,
+        default=None,
+        help="Optional external vLLM server URL. If not provided, TRL will automatically spawn a vLLM server.",
+    )
 
     args = parser.parse_args()
 
@@ -172,6 +178,7 @@ def main():
         run_name=run_name,
         num_gpus=1,
         reward_weights=None,  # Equal weighting for all rewards
+        vllm_server_url=args.vllm_server_url,
     )
 
     # Override with user-specified parameters
