@@ -89,10 +89,13 @@ def main():
     rubric_tests = []
     try:
         from RAPM.rapm_rubric import RAPMRubric
+
         rubric = RAPMRubric(mode="image", answer_mode="mc")
         turn_funcs = rubric.turn_reward_funcs
         outcome_funcs = rubric.outcome_reward_funcs
-        print(f"   ✓ RAPM Rubric: {len(turn_funcs)} turn funcs, {len(outcome_funcs)} outcome funcs")
+        print(
+            f"   ✓ RAPM Rubric: {len(turn_funcs)} turn funcs, {len(outcome_funcs)} outcome funcs"
+        )
         rubric_tests.append(True)
     except Exception as e:
         print(f"   ✗ RAPM Rubric: {e}")
@@ -100,10 +103,13 @@ def main():
 
     try:
         from SWM.swm_rubric import SWMRubric
+
         rubric = SWMRubric()
         turn_funcs = rubric.turn_reward_funcs
         outcome_funcs = rubric.outcome_reward_funcs
-        print(f"   ✓ SWM Rubric: {len(turn_funcs)} turn funcs, {len(outcome_funcs)} outcome funcs")
+        print(
+            f"   ✓ SWM Rubric: {len(turn_funcs)} turn funcs, {len(outcome_funcs)} outcome funcs"
+        )
         rubric_tests.append(True)
     except Exception as e:
         print(f"   ✗ SWM Rubric: {e}")
@@ -111,10 +117,13 @@ def main():
 
     try:
         from WCST.wcst_rubric import WCSTRubric
+
         rubric = WCSTRubric()
         turn_funcs = rubric.turn_reward_funcs
         outcome_funcs = rubric.outcome_reward_funcs
-        print(f"   ✓ WCST Rubric: {len(turn_funcs)} turn funcs, {len(outcome_funcs)} outcome funcs")
+        print(
+            f"   ✓ WCST Rubric: {len(turn_funcs)} turn funcs, {len(outcome_funcs)} outcome funcs"
+        )
         rubric_tests.append(True)
     except Exception as e:
         print(f"   ✗ WCST Rubric: {e}")
