@@ -63,12 +63,14 @@ def _generate_swm_example(
         "token_box": token_box,
         "n_boxes": n_boxes,
         "n_tokens": n_tokens,
+        "max_trials": n_boxes**2,  # Default max trials
     }
 
 
 def _create_swm_dataset(
     n_boxes: int = 8,
     n_tokens: int = 1,
+    max_trials: int = 64,
     num_episodes: int = 10,
     seed: Optional[int] = None,
 ) -> Dataset:
@@ -77,6 +79,8 @@ def _create_swm_dataset(
     for i in range(num_episodes):
         episode_seed = (seed + i) if seed is not None else None
         episode_data = _generate_swm_example(n_boxes, n_tokens, episode_seed)
+        # Override max_trials if specified
+        episode_data["max_trials"] = max_trials
 
         rows.append(
             {
@@ -127,6 +131,8 @@ def load_environment(
     n_boxes: int = 8,
     n_tokens: int = 1,
     mode: str = "text",
+    image_only: bool = False,
+    max_trials: int = 64,
     num_episodes: int = 10,
     seed: Optional[int] = None,
     **kwargs,
@@ -137,7 +143,9 @@ def load_environment(
     Args:
         n_boxes: Number of boxes
         n_tokens: Number of token types
-        mode: "text" (image mode is placeholder)
+        mode: "text" or "image"
+        image_only: If True (image mode), only show image feedback without text
+        max_trials: Maximum number of trials per episode (default: n_boxes^2)
         num_episodes: Number of episodes in dataset
         seed: Random seed for episode generation
         **kwargs: Additional args passed to MultiTurnEnv
@@ -148,13 +156,20 @@ def load_environment(
     if vf is None:
         raise ImportError("verifiers is not installed; use in a verifiers workspace")
 
-    dataset = _create_swm_dataset(n_boxes, n_tokens, num_episodes, seed)
+    dataset = _create_swm_dataset(n_boxes, n_tokens, max_trials, num_episodes, seed)
 
-    system_prompt = f"""You will be performing a text version of the Spatial Working Memory (SWM) test.
+    # Store mode info in dataset for rubric
+    feedback_desc = "text feedback"
+    if mode == "image":
+        if image_only:
+            feedback_desc = "image-only feedback (no text)"
+        else:
+            feedback_desc = "image + text feedback"
+
+    system_prompt = f"""You will be performing a {'text' if mode == 'text' else 'image-based'} version of the Spatial Working Memory (SWM) test.
 There are {n_tokens} types of tokens, hidden in any one of {n_boxes} boxes.
 Your goal is to find the {n_tokens} types of tokens {n_boxes} times each, by repeatedly selecting a box to open.
-If the box contains a token, you will be informed which token type it is.
-If the box does not contain a token, you will be informed that it is empty.
+{'You will receive ' + feedback_desc + ' after each guess.' if mode == 'image' else 'If the box contains a token, you will be informed which token type it is. If the box does not contain a token, you will be informed that it is empty.'}
 Once the token is found, another token of the same type will be regenerated in another box.
 The token will be generated in a box that has never contained a token of that type before in the trial.
 The token may be generated in a box that has been opened and found empty before, as long as it never contained the token of that type previously.
@@ -240,7 +255,7 @@ Your final answer should be a box number, wrapped with <answer> and </answer>"""
             state["n_tokens"] = info.get("n_tokens", 1)
             state["n_guesses"] = 0
             state["error_count"] = 0  # Track errors for outcome reward
-            state["max_guesses"] = state["n_boxes"] ** 2
+            state["max_guesses"] = info.get("max_trials", state["n_boxes"] ** 2)
             return state
 
         @vf.stop
