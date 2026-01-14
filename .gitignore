@@ -170,6 +170,9 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+# wandb
+wandb/
+
 data*/
 wcst_data*/
 rapm_data*/
