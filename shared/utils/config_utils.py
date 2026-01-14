@@ -1,3 +1,4 @@
+import os
 from trl import GRPOConfig
 from typing import List, Optional
 
@@ -6,37 +7,53 @@ def get_default_grpo_config(
     num_gpus: int = 1,
     run_name: Optional[str] = None,
     reward_weights: Optional[List[float]] = None,
+    vllm_server_url: Optional[str] = None,
 ) -> GRPOConfig:
+    """Get default GRPO configuration.
 
+    Args:
+        num_gpus: Number of GPUs for training
+        run_name: Name for the training run
+        reward_weights: Weights for reward functions
+        vllm_server_url: Optional external vLLM server URL. If None, TRL will automatically
+                        spawn a vLLM server for this training run.
+    """
     output_dir = f"outputs/{run_name}" if run_name else None
-    return GRPOConfig(
-        output_dir=output_dir,
-        run_name=run_name,
-        learning_rate=1e-6,
-        lr_scheduler_type="constant_with_warmup",
-        warmup_steps=20,
-        num_train_epochs=1,
-        bf16=True,
-        adam_beta1=0.9,
-        adam_beta2=0.99,
-        max_grad_norm=0.1,
-        num_iterations=1,
-        beta=0.04,
-        max_prompt_length=1024,
-        max_completion_length=1024,
-        per_device_train_batch_size=2,
-        num_generations=(2 * num_gpus - 2 if num_gpus > 1 else 2),
-        gradient_accumulation_steps=int(16 / num_gpus),
-        gradient_checkpointing=True,
-        save_strategy="steps",
-        save_steps=100,
-        save_only_model=True,
-        use_vllm=True,
-        # vllm_device=f"cuda:{num_gpus-1}",
-        vllm_gpu_memory_utilization=0.7 if num_gpus > 1 else 0.3,
-        logging_steps=1,
-        log_on_each_node=False,
-        log_completions=True,
-        report_to="wandb",
-        reward_weights=reward_weights,
-    )
+
+    config_kwargs = {
+        "output_dir": output_dir,
+        "run_name": run_name,
+        "learning_rate": 1e-6,
+        "lr_scheduler_type": "constant_with_warmup",
+        "warmup_steps": 20,
+        "num_train_epochs": 1,
+        "bf16": True,
+        "adam_beta1": 0.9,
+        "adam_beta2": 0.99,
+        "max_grad_norm": 0.1,
+        "num_iterations": 1,
+        "beta": 0.04,
+        "max_completion_length": 4096,  # Max output tokens per turn (including reasoning)
+        "per_device_train_batch_size": 2,
+        "num_generations": (2 * num_gpus - 2 if num_gpus > 1 else 2),
+        "gradient_accumulation_steps": int(16 / num_gpus),
+        "gradient_checkpointing": True,
+        "save_strategy": "steps",
+        "save_steps": 100,
+        "save_only_model": True,
+        "use_vllm": True,
+        "vllm_max_model_length": 32768,  # Maximum context length
+        "vllm_gpu_memory_utilization": 0.7 if num_gpus > 1 else 0.3,
+        "logging_steps": 1,
+        "log_on_each_node": False,
+        "log_completions": True,
+        "report_to": "wandb",
+        "reward_weights": reward_weights,
+    }
+
+    # Only set vllm_server_base_url if explicitly provided
+    # Otherwise, TRL will automatically spawn a vLLM server
+    if vllm_server_url is not None:
+        config_kwargs["vllm_server_base_url"] = vllm_server_url
+
+    return GRPOConfig(**config_kwargs)
