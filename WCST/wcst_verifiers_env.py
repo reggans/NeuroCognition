@@ -71,7 +71,9 @@ def _generate_wcst_trial(
         # Use card generator - returns strings, not dicts
         bg_color_value = "white" if not bg_color else None  # None means random
         ambiguous = False
-        given_str, options_str = wcst_generator(rule, randomize_rule, bg_color_value, ambiguous)
+        given_str, options_str = wcst_generator(
+            rule, randomize_rule, bg_color_value, ambiguous
+        )
 
         # The generator returns string descriptions, and first option is always correct
         # given_str: e.g., "one red circle" or "two green triangle"
