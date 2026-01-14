@@ -91,6 +91,12 @@ def main():
     parser.add_argument(
         "--seed", type=int, default=42, help="Random seed (default: 42)"
     )
+    parser.add_argument(
+        "--vllm_server_url",
+        type=str,
+        default=None,
+        help="Optional external vLLM server URL. If not provided, TRL will automatically spawn a vLLM server.",
+    )
 
     args = parser.parse_args()
 
@@ -117,11 +123,19 @@ def main():
 
     # Create environment
     print("\n[2/5] Creating RAPM environment...")
+    # Ensure full path to dataset
+    if args.text_dataset_path and not os.path.isabs(args.text_dataset_path):
+        text_dataset_path = os.path.join(
+            str(Path(__file__).parent), args.text_dataset_path
+        )
+    else:
+        text_dataset_path = args.text_dataset_path
+
     env = load_environment(
         mode=args.mode,
         answer_mode=args.answer_mode,
         max_examples=args.num_episodes,
-        text_dataset_path=args.text_dataset_path,
+        text_dataset_path=text_dataset_path,
         seed=args.seed,
     )
     print(f"✓ Environment created with {args.num_episodes} episodes")
@@ -158,6 +172,7 @@ def main():
         run_name=run_name,
         num_gpus=1,
         reward_weights=None,  # Equal weighting for all rewards
+        vllm_server_url=args.vllm_server_url,
     )
 
     # Override with user-specified parameters
