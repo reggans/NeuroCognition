@@ -64,13 +64,14 @@ def _generate_wcst_trial(
     rule: str,
     trial_num: int,
     randomize_rule: bool = False,
+    bg_color: bool = False,
 ) -> WCSTTrial:
     """Generate a single WCST trial using existing generators."""
     if variant in ["card", "card-random", "card-image"]:
         # Use card generator
-        bg_color = "white"
+        bg_color_value = "white" if not bg_color else None  # None means random
         ambiguous = False
-        given, options = wcst_generator(rule, randomize_rule, bg_color, ambiguous)
+        given, options = wcst_generator(rule, randomize_rule, bg_color_value, ambiguous)
 
         # Find correct option
         if rule == "number":
@@ -165,6 +166,7 @@ def _generate_wcst_trial(
 def _generate_wcst_episode(
     variant: str,
     max_trials: int,
+    bg_color: bool = False,
     seed: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Generate a full WCST episode with rule cycles."""
@@ -174,6 +176,9 @@ def _generate_wcst_episode(
     # Determine rules based on variant
     if variant in ["card", "card-random", "card-image"]:
         rules = CARD_RULES.copy()
+        if not bg_color:
+            # Remove background from rules if not enabled
+            rules = [r for r in rules if r != "background"]
     elif variant == "string":
         rules = STRING_RULES.copy()
     else:
@@ -188,7 +193,7 @@ def _generate_wcst_episode(
     for trial_num in range(max_trials):
         rule = rules[current_rule_idx % len(rules)]
         randomize = variant == "card-random"
-        trial = _generate_wcst_trial(variant, rule, trial_num, randomize)
+        trial = _generate_wcst_trial(variant, rule, trial_num, randomize, bg_color)
         # Convert dataclass to dict for serialization
         trials.append(
             {
@@ -211,6 +216,7 @@ def _generate_wcst_episode(
 def _create_wcst_dataset(
     variant: str = "card",
     max_trials: int = 128,
+    bg_color: bool = False,
     num_episodes: int = 10,
     seed: Optional[int] = None,
 ) -> Dataset:
@@ -218,7 +224,9 @@ def _create_wcst_dataset(
     rows: List[Dict[str, Any]] = []
     for i in range(num_episodes):
         episode_seed = (seed + i) if seed is not None else None
-        episode_data = _generate_wcst_episode(variant, max_trials, episode_seed)
+        episode_data = _generate_wcst_episode(
+            variant, max_trials, bg_color, episode_seed
+        )
 
         rows.append(
             {
@@ -260,6 +268,8 @@ def _parse_choice_answer(text: str) -> Tuple[Optional[int], str]:
 def load_environment(
     variant: str = "card",
     max_trials: int = 128,
+    bg_color: bool = False,
+    image_mode: bool = False,
     num_episodes: int = 10,
     seed: Optional[int] = None,
     **kwargs,
@@ -270,6 +280,8 @@ def load_environment(
     Args:
         variant: "card", "card-random", "card-image", "string", or "empty"
         max_trials: Maximum trials per episode
+        bg_color: Whether to include background color as a matching rule
+        image_mode: Whether to use image-based cards (sets variant to "card-image")
         num_episodes: Number of episodes in dataset
         seed: Random seed for episode generation
         **kwargs: Additional args passed to MultiTurnEnv
@@ -280,11 +292,18 @@ def load_environment(
     if vf is None:
         raise ImportError("verifiers is not installed; use in a verifiers workspace")
 
-    dataset = _create_wcst_dataset(variant, max_trials, num_episodes, seed)
+    # Adjust variant if image_mode is requested
+    if image_mode and variant == "card":
+        variant = "card-image"
+
+    dataset = _create_wcst_dataset(variant, max_trials, bg_color, num_episodes, seed)
 
     # Determine rules for system prompt
     if variant in ["card", "card-random", "card-image"]:
-        rule_list = "number, color, shape, or background"
+        if bg_color:
+            rule_list = "number, color, shape, or background"
+        else:
+            rule_list = "number, color, or shape"
     elif variant == "string":
         rule_list = "length, number of vowels, or number of consonants"
     else:
