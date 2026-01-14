@@ -68,48 +68,15 @@ def _generate_wcst_trial(
 ) -> WCSTTrial:
     """Generate a single WCST trial using existing generators."""
     if variant in ["card", "card-random", "card-image"]:
-        # Use card generator
+        # Use card generator - returns strings, not dicts
         bg_color_value = "white" if not bg_color else None  # None means random
         ambiguous = False
-        given, options = wcst_generator(rule, randomize_rule, bg_color_value, ambiguous)
+        given_str, options_str = wcst_generator(rule, randomize_rule, bg_color_value, ambiguous)
 
-        # Find correct option
-        if rule == "number":
-            target = len(given["symbols"])
-            correct_idx = next(
-                (i for i, opt in enumerate(options) if len(opt["symbols"]) == target), 0
-            )
-        elif rule == "color":
-            target = given["symbols"][0]["color"]
-            correct_idx = next(
-                (
-                    i
-                    for i, opt in enumerate(options)
-                    if opt["symbols"][0]["color"] == target
-                ),
-                0,
-            )
-        elif rule == "shape":
-            target = given["symbols"][0]["shape"]
-            correct_idx = next(
-                (
-                    i
-                    for i, opt in enumerate(options)
-                    if opt["symbols"][0]["shape"] == target
-                ),
-                0,
-            )
-        elif rule == "background":
-            target = given["background"]
-            correct_idx = next(
-                (i for i, opt in enumerate(options) if opt["background"] == target), 0
-            )
-        else:
-            correct_idx = 0
-
-        # Format as strings for text mode
-        given_str = str(given)
-        options_str = [str(opt) for opt in options]
+        # The generator returns string descriptions, and first option is always correct
+        # given_str: e.g., "one red circle" or "two green triangle"
+        # options_str: list of strings like ["one red circle", "two green triangle", ...]
+        correct_idx = 0  # First option is always correct by design of wcst_generator
 
     elif variant == "string":
         # Use string generator
