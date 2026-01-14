@@ -11,8 +11,8 @@ import re
 from typing import List, Optional, Tuple
 
 try:
-    from verifiers.rubrics import Rubric
-    from verifiers.parsers import XMLParser
+    from verifiers.rubrics.rubric import Rubric
+    from verifiers.parsers.xml_parser import XMLParser
 except ImportError:
     raise ImportError(
         "verifiers not installed. Install Multi-Turn-RL-Agent:\n"
