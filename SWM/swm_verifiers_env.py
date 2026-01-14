@@ -91,7 +91,6 @@ def _create_swm_dataset(
                         "content": f"Find {n_tokens} token(s) {n_boxes} times each by opening boxes.",
                     }
                 ],
-                "answer": "",  # No single answer for SWM
                 "info": episode_data,
             }
         )

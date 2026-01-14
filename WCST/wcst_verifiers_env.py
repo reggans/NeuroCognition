@@ -206,7 +206,6 @@ def _create_wcst_dataset(
                         "content": "Complete the Wisconsin Card Sorting Test by matching cards/strings based on hidden rules.",
                     }
                 ],
-                "answer": "",  # No single answer for WCST
                 "info": episode_data,
             }
         )
