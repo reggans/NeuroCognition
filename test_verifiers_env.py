@@ -47,7 +47,7 @@ class QwenInferenceModel:
 
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen2.5-0.5B",
+        model_name: str = "Qwen/Qwen3-0.6B",
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         max_tokens: int = 512,
         temperature: float = 0.7,
@@ -67,17 +67,13 @@ class QwenInferenceModel:
             trust_remote_code=True,
         )
 
-        # Load model with manual device placement
-        print("Loading model to CPU first...")
+        # Load model with minimal parameters
+        print("Loading model...")
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            torch_dtype="auto",
             trust_remote_code=True,
+            device_map=self.device,
         )
-
-        if device == "cuda":
-            print("Moving model to GPU...")
-            self.model = self.model.to(device).half()  # Use half precision on GPU
 
         self.model.eval()
         print(f"Model loaded successfully")
@@ -279,7 +275,7 @@ async def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="Qwen/Qwen2.5-0.5B",
+        default="Qwen/Qwen3-0.6B",
         help="Model name to use for inference",
     )
     parser.add_argument(
