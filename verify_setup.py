@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Setup verification script for verifiers integration.
-Checks all dependencies and environment configuration.
+Checks all dependencies, rubrics, and environment configuration.
 """
 
 import sys
@@ -9,6 +9,7 @@ import importlib
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
 
 def check_import(module_name: str, description: str = "") -> bool:
@@ -60,18 +61,9 @@ def main():
     # Check task-specific files
     print("\n3. Task Modules:")
     task_files = [
-        (
-            PROJECT_ROOT / "RAPM" / "rapm_verifiers_env.py",
-            "RAPM Verifiers Env",
-        ),
-        (
-            PROJECT_ROOT / "SWM" / "swm_verifiers_env.py",
-            "SWM Verifiers Env",
-        ),
-        (
-            PROJECT_ROOT / "WCST" / "wcst_verifiers_env.py",
-            "WCST Verifiers Env",
-        ),
+        (PROJECT_ROOT / "RAPM" / "rapm_verifiers_env.py", "RAPM Verifiers Env"),
+        (PROJECT_ROOT / "SWM" / "swm_verifiers_env.py", "SWM Verifiers Env"),
+        (PROJECT_ROOT / "WCST" / "wcst_verifiers_env.py", "WCST Verifiers Env"),
     ]
 
     files_ok = True
@@ -79,13 +71,61 @@ def main():
         if not check_file(file_path, desc):
             files_ok = False
 
+    # Check rubrics
+    print("\n4. Rubric Files:")
+    rubric_files = [
+        (PROJECT_ROOT / "RAPM" / "rapm_rubric.py", "RAPM Rubric"),
+        (PROJECT_ROOT / "SWM" / "swm_rubric.py", "SWM Rubric"),
+        (PROJECT_ROOT / "WCST" / "wcst_rubric.py", "WCST Rubric"),
+    ]
+
+    rubrics_ok = True
+    for file_path, desc in rubric_files:
+        if not check_file(file_path, desc):
+            rubrics_ok = False
+
+    # Test rubric imports and structure
+    print("\n5. Rubric Class Structure:")
+    rubric_tests = []
+    try:
+        from RAPM.rapm_rubric import RAPMRubric
+        rubric = RAPMRubric(mode="image", answer_mode="mc")
+        turn_funcs = rubric.turn_reward_funcs
+        outcome_funcs = rubric.outcome_reward_funcs
+        print(f"   ✓ RAPM Rubric: {len(turn_funcs)} turn funcs, {len(outcome_funcs)} outcome funcs")
+        rubric_tests.append(True)
+    except Exception as e:
+        print(f"   ✗ RAPM Rubric: {e}")
+        rubric_tests.append(False)
+
+    try:
+        from SWM.swm_rubric import SWMRubric
+        rubric = SWMRubric()
+        turn_funcs = rubric.turn_reward_funcs
+        outcome_funcs = rubric.outcome_reward_funcs
+        print(f"   ✓ SWM Rubric: {len(turn_funcs)} turn funcs, {len(outcome_funcs)} outcome funcs")
+        rubric_tests.append(True)
+    except Exception as e:
+        print(f"   ✗ SWM Rubric: {e}")
+        rubric_tests.append(False)
+
+    try:
+        from WCST.wcst_rubric import WCSTRubric
+        rubric = WCSTRubric()
+        turn_funcs = rubric.turn_reward_funcs
+        outcome_funcs = rubric.outcome_reward_funcs
+        print(f"   ✓ WCST Rubric: {len(turn_funcs)} turn funcs, {len(outcome_funcs)} outcome funcs")
+        rubric_tests.append(True)
+    except Exception as e:
+        print(f"   ✗ WCST Rubric: {e}")
+        rubric_tests.append(False)
+
+    rubrics_class_ok = all(rubric_tests)
+
     # Check RAPM validators
-    print("\n4. RAPM Validators:")
+    print("\n6. RAPM Validators:")
     rapm_validators = [
-        (
-            PROJECT_ROOT / "RAPM" / "text_rapm" / "validator.py",
-            "RAPM Text Validator",
-        ),
+        (PROJECT_ROOT / "RAPM" / "text_rapm" / "validator.py", "RAPM Text Validator"),
         (
             PROJECT_ROOT / "RAPM" / "text_rapm" / "per_cell_constraints.py",
             "RAPM Constraints",
@@ -98,7 +138,7 @@ def main():
             validators_ok = False
 
     # Check WCST utilities
-    print("\n5. WCST Utilities:")
+    print("\n7. WCST Utilities:")
     wcst_files = [
         (PROJECT_ROOT / "WCST" / "utils.py", "WCST Generators"),
     ]
@@ -109,7 +149,7 @@ def main():
             wcst_ok = False
 
     # Check GPU
-    print("\n6. GPU Information:")
+    print("\n8. GPU Information:")
     try:
         import torch
 
@@ -129,17 +169,27 @@ def main():
     print("Setup Summary:")
     print("=" * 70)
 
-    all_ok = python_ok and all_imports_ok and files_ok and validators_ok and wcst_ok
+    all_ok = (
+        python_ok
+        and all_imports_ok
+        and files_ok
+        and rubrics_ok
+        and rubrics_class_ok
+        and validators_ok
+        and wcst_ok
+    )
 
     if all_ok:
-        print("✓ All checks passed! Ready to test verifiers environments.")
+        print("✓ All checks passed! Ready to test verifiers and train models.")
         print("\nNext steps:")
-        print("1. Review requirements_unified.txt for all dependencies")
-        print("2. Run: python test_verifiers_env.py --task all --num-examples 2")
-        print("3. After server restart, run the full test suite")
+        print("1. Test rubrics and envs: python test_verifiers_env.py --task all")
+        print("2. Train individual task: python wcst_mt_grpo_train.py")
+        print("3. Train all tasks: python multi_task_mt_grpo_train.py")
         return 0
     else:
         print("✗ Some checks failed. Please resolve issues above.")
+        print("\nMissing dependencies? Run:")
+        print("  cd /root/Multi-Turn-RL-Agent && pip install -e .")
         return 1
 
 
