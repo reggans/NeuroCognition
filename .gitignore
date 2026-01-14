@@ -173,6 +173,10 @@ cython_debug/
 # wandb
 wandb/
 
+# outputs and logs
+outputs/
+logs/
+
 data*/
 wcst_data*/
 rapm_data*/
