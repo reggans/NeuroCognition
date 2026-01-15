@@ -19,18 +19,20 @@ class Rubric(ABC):
         self.reward_funcs = []
         self.reward_weights = None
 
-    def get_assistant_messages(self, trajectory: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    def get_assistant_messages(
+        self, trajectory: List[Dict[str, str]]
+    ) -> List[Dict[str, str]]:
         """Helper function to extract assistant messages from a trajectory."""
-        return [msg for msg in trajectory if msg['role'] == 'assistant']
+        return [msg for msg in trajectory if msg["role"] == "assistant"]
 
     def get_last_answer(self, trajectory: List[Dict[str, str]]) -> str | None:
         """Extract the last answer from a trajectory."""
         for msg in reversed(trajectory):
-            if msg['role'] == 'assistant':
+            if msg["role"] == "assistant":
                 if self.parser is None:
                     raise ValueError("Parser is not set")
-                parsed = self.parser.parse(msg['content'])
-                if hasattr(parsed, 'answer') and parsed.answer is not None:
+                parsed = self.parser.parse(msg["content"])
+                if hasattr(parsed, "answer") and parsed.answer is not None:
                     return parsed.answer
         return None
 
