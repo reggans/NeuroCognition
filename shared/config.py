@@ -33,6 +33,7 @@ def get_default_grpo_config(
         "max_grad_norm": 0.1,
         "num_iterations": 1,
         "beta": 0.04,
+        "max_prompt_length": 1024,
         "max_completion_length": 4096,  # Max output tokens per turn (including reasoning)
         "per_device_train_batch_size": 2,
         "num_generations": (2 * num_gpus - 2 if num_gpus > 1 else 2),
@@ -49,11 +50,16 @@ def get_default_grpo_config(
         "log_completions": True,
         "report_to": "wandb",
         "reward_weights": reward_weights,
+        "remove_unused_columns": False,  # Keep all columns (info, example_id, task)
     }
 
-    # Only set vllm_server_base_url if explicitly provided
-    # Otherwise, TRL will automatically spawn a vLLM server
+    # Set vLLM mode based on whether external server is provided
     if vllm_server_url is not None:
+        # Connect to external vLLM server
+        config_kwargs["vllm_mode"] = "server"
         config_kwargs["vllm_server_base_url"] = vllm_server_url
+    else:
+        # Auto-spawn colocated vLLM server
+        config_kwargs["vllm_mode"] = "colocate"
 
     return GRPOConfig(**config_kwargs)

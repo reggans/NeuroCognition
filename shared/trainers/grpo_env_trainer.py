@@ -17,8 +17,13 @@ from trl import GRPOTrainer, GRPOConfig
 from trl.data_utils import apply_chat_template, maybe_apply_chat_template
 from trl.trainer.utils import pad
 
-from verifiers.envs.environment import Environment
-from ..utils.logging_utils import print_prompt_completions_sample
+from ..envs.environment import Environment
+
+# vLLM imports for SamplingParams
+try:
+    from vllm import SamplingParams
+except ImportError:
+    SamplingParams = None
 
 if is_peft_available():
     from peft import PeftConfig
@@ -245,19 +250,36 @@ class GRPOEnvTrainer(GRPOTrainer):
             prompt_inputs["attention_mask"],
         )
 
-        if self.max_prompt_length is not None:
-            prompt_ids = prompt_ids[:, -self.max_prompt_length :]
-            prompt_mask = prompt_mask[:, -self.max_prompt_length :]
+        # Use args.max_prompt_length (deprecated but still works)
+        max_prompt_length = getattr(self.args, "max_prompt_length", None)
+        if max_prompt_length is not None:
+            prompt_ids = prompt_ids[:, -max_prompt_length:]
+            prompt_mask = prompt_mask[:, -max_prompt_length:]
 
         return prompt_ids, prompt_mask
 
     def _generate_completions(self, prompts):
         all_prompts = gather_object(prompts)
         if self.accelerator.is_main_process:
+            # Create sampling params for vLLM generation
+            generation_kwargs = {
+                "n": 1,
+                "repetition_penalty": getattr(self, "repetition_penalty", 1.0),
+                "temperature": getattr(self, "temperature", 1.0),
+                "top_p": getattr(self, "top_p", 1.0),
+                "top_k": -1 if getattr(self, "top_k", None) is None else self.top_k,
+                "min_p": 0.0 if getattr(self, "min_p", None) is None else self.min_p,
+                "max_tokens": getattr(self, "max_completion_length", self.args.max_completion_length),
+                "logprobs": 0,
+            }
+            if self.args.generation_kwargs is not None:
+                generation_kwargs.update(self.args.generation_kwargs)
+            sampling_params = SamplingParams(**generation_kwargs)
+            
             env_result = self.env.generate(
                 prompts=all_prompts,
                 llm=self.llm,
-                sampling_params=self.sampling_params,
+                sampling_params=sampling_params,
             )
             completion_ids = env_result["ids"]
             completion_messages = env_result["messages"]
