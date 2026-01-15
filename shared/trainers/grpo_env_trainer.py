@@ -113,7 +113,9 @@ class GRPOEnvTrainer(GRPOTrainer):
             **kwargs,
         )
         self.env = env
-        self._last_loaded_step = -1  # Track vLLM model loading to avoid reloading during grad accumulation
+        self._last_loaded_step = (
+            -1
+        )  # Track vLLM model loading to avoid reloading during grad accumulation
 
     def _generate_and_score_completions(
         self, inputs: Dict[str, Union[torch.Tensor, Any]]
@@ -269,13 +271,15 @@ class GRPOEnvTrainer(GRPOTrainer):
                 "top_p": getattr(self, "top_p", 1.0),
                 "top_k": -1 if getattr(self, "top_k", None) is None else self.top_k,
                 "min_p": 0.0 if getattr(self, "min_p", None) is None else self.min_p,
-                "max_tokens": getattr(self, "max_completion_length", self.args.max_completion_length),
+                "max_tokens": getattr(
+                    self, "max_completion_length", self.args.max_completion_length
+                ),
                 "logprobs": 0,
             }
             if self.args.generation_kwargs is not None:
                 generation_kwargs.update(self.args.generation_kwargs)
             sampling_params = SamplingParams(**generation_kwargs)
-            
+
             env_result = self.env.generate(
                 prompts=all_prompts,
                 llm=self.llm,

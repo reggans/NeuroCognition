@@ -34,11 +34,13 @@ class Environment(ABC):
     @abstractmethod
     def get_rubric(self, **kwargs: Any) -> List[RewardFunc]:
         pass
-    
+
     @abstractmethod
-    def generate(self,
-                 prompts: List[List[Dict[str, Any]]],
-                 llm: LLM,
-                 sampling_params: SamplingParams,
-                 **kwargs: Any) -> Dict[str, List[Sequence[int]] | List[str] | List[List[Dict[str, Any]]]]:
+    def generate(
+        self,
+        prompts: List[List[Dict[str, Any]]],
+        llm: LLM,
+        sampling_params: SamplingParams,
+        **kwargs: Any,
+    ) -> Dict[str, List[Sequence[int]] | List[str] | List[List[Dict[str, Any]]]]:
         pass
