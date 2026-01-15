@@ -14,7 +14,7 @@ from transformers import (
 from transformers.utils.import_utils import is_peft_available
 from trl import GRPOTrainer, GRPOConfig
 
-from verifiers.envs.environment import Environment
+from ..envs.environment import Environment
 from .grpo_env_trainer import GRPOEnvTrainer
 
 if is_peft_available():
