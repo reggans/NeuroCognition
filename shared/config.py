@@ -1,5 +1,5 @@
 import os
-from trl import GRPOConfig
+from trl.trainer.grpo_config import GRPOConfig
 from typing import List, Optional
 
 
@@ -15,9 +15,11 @@ def get_default_grpo_config(
         num_gpus: Number of GPUs for training
         run_name: Name for the training run
         reward_weights: Weights for reward functions
-        vllm_server_url: Optional external vLLM server URL. If None, TRL will automatically
-                        spawn a vLLM server for this training run.
+        vllm_server_url: Optional external vLLM server URL. If None and using colocate mode,
+                        TRL will automatically spawn a vLLM server for this training run.
     """
+    os.environ.setdefault("WANDB_PROJECT", "CognitiveEval-RL")
+
     output_dir = f"outputs/{run_name}" if run_name else None
 
     config_kwargs = {
@@ -33,18 +35,22 @@ def get_default_grpo_config(
         "max_grad_norm": 0.1,
         "num_iterations": 1,
         "beta": 0.04,
-        "max_prompt_length": 1024,
-        "max_completion_length": 4096,  # Max output tokens per turn (including reasoning)
-        "per_device_train_batch_size": 2,
-        "num_generations": (2 * num_gpus - 2 if num_gpus > 1 else 2),
-        "gradient_accumulation_steps": int(16 / num_gpus),
+        # max_prompt_length: None = no truncation (important for multi-turn where prompts grow)
+        # The prompt includes full conversation history, truncating would lose early context
+        "max_prompt_length": None,
+        # max_completion_length: Per-turn generation limit (NOT total episode tokens!)
+        # Episode token budget is controlled by max_episode_tokens in environment config
+        "max_completion_length": 4096,  # Per-turn limit for thinking + answer
+        "per_device_train_batch_size": 1,
+        "num_generations": 4,
+        "gradient_accumulation_steps": int(32 / num_gpus) if num_gpus > 1 else 16,
         "gradient_checkpointing": True,
         "save_strategy": "steps",
         "save_steps": 100,
         "save_only_model": True,
         "use_vllm": True,
-        "vllm_max_model_length": 32768,  # Maximum context length
-        "vllm_gpu_memory_utilization": 0.7 if num_gpus > 1 else 0.3,
+        "vllm_max_model_length": 32768,  # Model context length (should match max_episode_tokens)
+        "vllm_gpu_memory_utilization": 0.8,  # Restored for server mode (separate GPU)
         "logging_steps": 1,
         "log_on_each_node": False,
         "log_completions": True,
