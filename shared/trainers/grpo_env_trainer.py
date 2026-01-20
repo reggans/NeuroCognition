@@ -15,15 +15,22 @@ from transformers.utils.import_utils import is_peft_available
 from transformers.utils.import_utils import is_rich_available
 from trl import GRPOTrainer, GRPOConfig
 from trl.data_utils import apply_chat_template, maybe_apply_chat_template
-from trl.trainer.utils import pad
+from trl.trainer.utils import pad, print_prompt_completions_sample
 
 from ..envs.environment import Environment
+from ..envs.multiturn_env import VLLMServerAdapter
 
 # vLLM imports for SamplingParams
 try:
     from vllm import SamplingParams
 except ImportError:
     SamplingParams = None
+
+# Import VLLMClient for server mode
+try:
+    from trl.extras.vllm_client import VLLMClient
+except ImportError:
+    VLLMClient = None
 
 if is_peft_available():
     from peft import PeftConfig
@@ -53,8 +60,10 @@ class GRPOEnvTrainer(GRPOTrainer):
             Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]
         ] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
+        enable_thinking: bool = True,  # Whether to enable thinking mode for Qwen3 models
         **kwargs,
     ):
+        self.enable_thinking = enable_thinking
         if not args.use_vllm:
             raise ValueError("vLLM must be enabled for GRPOEnvTrainer")
         if not (
@@ -116,6 +125,23 @@ class GRPOEnvTrainer(GRPOTrainer):
         self._last_loaded_step = (
             -1
         )  # Track vLLM model loading to avoid reloading during grad accumulation
+
+    def _get_per_token_logps(
+        self, model, input_ids, attention_mask, logits_to_keep, batch_size=None
+    ):
+        """
+        Compatibility wrapper for TRL 0.26+ which renamed _get_per_token_logps
+        to _get_per_token_logps_and_entropies. Returns tuple (logps, entropies).
+        """
+        logps, _entropies = self._get_per_token_logps_and_entropies(
+            model=model,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            logits_to_keep=logits_to_keep,
+            batch_size=batch_size,
+            compute_entropy=False,
+        )
+        return logps
 
     def _generate_and_score_completions(
         self, inputs: Dict[str, Union[torch.Tensor, Any]]
@@ -236,16 +262,32 @@ class GRPOEnvTrainer(GRPOTrainer):
 
     def _prepare_prompt_inputs(self, inputs):
         prompts_text = [
-            maybe_apply_chat_template(example, self.processing_class)["prompt"]
+            maybe_apply_chat_template(
+                example, 
+                self.processing_class,
+                enable_thinking=self.enable_thinking,
+            )["prompt"]
             for example in inputs
         ]
-        prompt_inputs = self.processing_class(
-            prompts_text,
-            return_tensors="pt",
-            padding=True,
-            padding_side="left",
-            add_special_tokens=False,
-        )
+        # For VLM processors, use text= keyword and pass images only when supported
+        try:
+            prompt_inputs = self.processing_class(
+                text=prompts_text,
+                images=None,
+                return_tensors="pt",
+                padding=True,
+                padding_side="left",
+                add_special_tokens=False,
+            )
+        except TypeError:
+            # Text-only tokenizers do not accept images
+            prompt_inputs = self.processing_class(
+                text=prompts_text,
+                return_tensors="pt",
+                padding=True,
+                padding_side="left",
+                add_special_tokens=False,
+            )
         prompt_inputs = Trainer._prepare_inputs(self, prompt_inputs)
         prompt_ids, prompt_mask = (
             prompt_inputs["input_ids"],
@@ -260,8 +302,41 @@ class GRPOEnvTrainer(GRPOTrainer):
 
         return prompt_ids, prompt_mask
 
-    def _generate_completions(self, prompts):
+    def _get_llm_for_generation(self):
+        """Get the appropriate LLM interface based on vllm_mode.
+        
+        Returns:
+            For colocate mode: self.llm (vLLM LLM object)
+            For server mode: VLLMServerAdapter wrapping self.vllm_client
+        """
+        vllm_mode = getattr(self.args, "vllm_mode", "colocate")
+        
+        if vllm_mode == "colocate":
+            return self.llm
+        elif vllm_mode == "server":
+            # Get tokenizer from processing_class
+            tokenizer = self.processing_class
+            if hasattr(tokenizer, 'tokenizer'):
+                # For VLM processors like Qwen2VLProcessor
+                tokenizer = tokenizer.tokenizer
+            
+            # Create adapter for server mode
+            return VLLMServerAdapter(
+                vllm_client=self.vllm_client,
+                tokenizer=tokenizer,
+                max_tokens=getattr(self, "max_completion_length", self.args.max_completion_length),
+                temperature=getattr(self, "temperature", 1.0),
+                top_p=getattr(self, "top_p", 1.0),
+                top_k=-1 if getattr(self, "top_k", None) is None else self.top_k,
+                min_p=0.0 if getattr(self, "min_p", None) is None else self.min_p,
+                repetition_penalty=getattr(self, "repetition_penalty", 1.0),
+            )
+        else:
+            raise ValueError(f"Unknown vllm_mode: {vllm_mode}")
+
+    def _generate_completions(self, prompts, setups=None):
         all_prompts = gather_object(prompts)
+        all_setups = gather_object(setups if setups else [None] * len(prompts))
         if self.accelerator.is_main_process:
             # Create sampling params for vLLM generation
             generation_kwargs = {
@@ -280,10 +355,14 @@ class GRPOEnvTrainer(GRPOTrainer):
                 generation_kwargs.update(self.args.generation_kwargs)
             sampling_params = SamplingParams(**generation_kwargs)
 
+            # Get appropriate LLM based on vllm_mode
+            llm = self._get_llm_for_generation()
+            
             env_result = self.env.generate(
                 prompts=all_prompts,
-                llm=self.llm,
+                llm=llm,
                 sampling_params=sampling_params,
+                setups=all_setups,
             )
             completion_ids = env_result["ids"]
             completion_messages = env_result["messages"]
@@ -308,8 +387,10 @@ class GRPOEnvTrainer(GRPOTrainer):
 
         device = self.accelerator.device
         completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
+        # For VLM processors, pad_token_id is not directly on the processor but on its tokenizer
+        # GRPOTrainer sets self.pad_token_id from the tokenizer, so use that
         completion_ids = pad(
-            completion_ids, padding_value=self.processing_class.pad_token_id
+            completion_ids, padding_value=self.pad_token_id
         )
 
         completion_mask = [
@@ -399,11 +480,16 @@ class GRPOEnvTrainer(GRPOTrainer):
 
         if self.accelerator.is_main_process:
             if is_rich_available():
+                # TRL 0.26 expects rewards as a dict and an advantages list; we only log combined reward here.
+                rewards_dict = {"combined": rewards_to_log}
+                # Advantages are not needed for logging; pass zeros to satisfy the signature.
+                advantages = [0.0 for _ in rewards_to_log]
                 print_prompt_completions_sample(
                     [str(prompts_to_log[0][-1]["content"])],
                     [completions_to_log[0]],
-                    [rewards_to_log[0]],
-                    self.state.global_step,
+                    rewards_dict,
+                    advantages,
+                    step=self.state.global_step,
                 )
             if (
                 self.args.report_to

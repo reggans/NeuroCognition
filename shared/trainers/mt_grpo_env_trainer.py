@@ -65,12 +65,19 @@ class MTGRPOEnvTrainer(GRPOEnvTrainer):
         self.env = env
         self.turn_advantage_coef = turn_advantage_coef
 
+        # Enable input grads when using gradient checkpointing (needed for LoRA/QLoRA)
+        if self.args is not None and getattr(self.args, "gradient_checkpointing", False):
+            if hasattr(self.model, "enable_input_require_grads"):
+                self.model.enable_input_require_grads()
+
     def _generate_and_score_completions(
         self, inputs: Dict[str, Union[torch.Tensor, Any]]
     ) -> Dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
 
         prompts = [x["prompt"] for x in inputs]
+        # Extract setup names for multi-task routing
+        setups = [x.get("setup") for x in inputs]
         prompt_ids, prompt_mask = self._prepare_prompt_inputs(inputs)
 
         if self.state.global_step != self._last_loaded_step:
@@ -78,7 +85,7 @@ class MTGRPOEnvTrainer(GRPOEnvTrainer):
             self._last_loaded_step = self.state.global_step
 
         completion_ids, completion_messages, completion_mask = (
-            self._generate_completions(prompts)
+            self._generate_completions(prompts, setups=setups)
         )
 
         prompt_completion_ids, attention_mask, logits_to_keep = (
@@ -306,7 +313,8 @@ class MTGRPOEnvTrainer(GRPOEnvTrainer):
             else per_token_logps.detach()
         )
         coef_1 = torch.exp(per_token_logps - old_per_token_logps)
-        coef_2 = torch.clamp(coef_1, 1 - self.epsilon, 1 + self.epsilon)
+        # TRL 0.26 uses epsilon_low and epsilon_high instead of epsilon
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
 
         if len(advantages.shape) == 2:
             per_token_loss1 = coef_1 * advantages
