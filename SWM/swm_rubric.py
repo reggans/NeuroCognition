@@ -7,20 +7,34 @@ Mirrors the reward design from swm_verifiers_env.py:
 - 2 Outcome rewards: total_tokens_found, error_ratio
 """
 
+import os
+import sys
 import re
 from typing import List, Optional, Tuple
 
-try:
-    from verifiers.rubrics.rubric import Rubric
-    from verifiers.parsers.xml_parser import XMLParser
-except ImportError:
-    raise ImportError(
-        "verifiers not installed. Install Multi-Turn-RL-Agent:\n"
-        "  cd /root/Multi-Turn-RL-Agent && pip install -e ."
-    )
+# Add parent directory to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Reward constants (matching swm_verifiers_env.py)
+try:
+    from shared.rubrics import Rubric
+    from shared.parsers import XMLParser
+except ImportError:
+
+    class Rubric:
+        def __init__(self):
+            self.turn_reward_funcs = []
+            self.outcome_reward_funcs = []
+
+    class XMLParser:
+        def __init__(self, fields=None):
+            self.fields = fields or []
+
+
+# Reward constants (matching MT-GRPO paper reward design)
+# Turn-level: +0.1 for correct format (encourage exploration with valid format)
 REWARD_TOKEN_FOUND = 1.0
+REWARD_VALID_FORMAT = 0.1  # Small positive for correct format (MT-GRPO Section 5.2)
+REWARD_VALID_BOX = 0.1  # Small positive for valid box selection
 REWARD_VALID_GUESS = 0.0
 REWARD_REPEATED_BOX = -0.5
 REWARD_ILLEGAL_BOX = -0.5
@@ -39,11 +53,11 @@ class SWMRubric(Rubric):
     - Text mode: box numbers (1 to n_boxes)
     - Image mode: coordinates (x, y) converted to box IDs
 
-    Turn-level rewards (4 functions):
-    1. turn_format_reward: -1.0 if invalid format, 0.0 if valid
-    2. turn_box_validity_reward: -1.0 if invalid (no-box/out-of-range), 0.0 if valid
-    3. turn_box_legality_reward: -0.5 if illegal/repeated, 0.0 if legal
-    4. turn_token_found_reward: +1.0 if token found, 0.0 if not found
+    Turn-level rewards (4 functions) - SUMMED across all turns:
+    1. turn_format_reward: +0.1 per valid format, -1.0 per invalid
+    2. turn_box_validity_reward: +0.1 per valid box, -1.0 per invalid
+    3. turn_box_legality_reward: -0.5 per illegal/repeated, 0.0 per legal
+    4. turn_token_found_reward: +1.0 per token found, 0.0 per empty
 
     Outcome-level rewards (2 functions):
     1. outcome_total_tokens_found: Tf / T (where T = n_boxes * n_tokens), [0.0-1.0]
@@ -174,10 +188,13 @@ class SWMRubric(Rubric):
         self, completions: List[List[dict]], answer: List[str], **kwargs
     ) -> List[float]:
         """
-        Reward for answer format validity.
+        Reward for answer format validity - summed across ALL turns.
 
-        Returns -1.0 if format invalid (no/malformed <answer> tags).
-        Returns 0.0 if format valid.
+        Per-turn rewards:
+        - +0.1 for each turn with valid <answer> tags
+        - -1.0 for each turn with invalid format
+
+        Returns sum of per-turn rewards for each trajectory.
         """
         rewards = []
         n_boxes = kwargs.get("n_boxes", self.n_boxes)
@@ -185,27 +202,24 @@ class SWMRubric(Rubric):
         box_coords = kwargs.get("box_coords", None)
 
         for trajectory in completions:
-            # Get last assistant message
-            last_assistant = None
-            for msg in reversed(trajectory):
+            total_reward = 0.0
+            has_assistant = False
+
+            for msg in trajectory:
                 if msg["role"] == "assistant":
-                    last_assistant = msg["content"]
-                    break
+                    has_assistant = True
+                    _, status = self._parse_box_answer(
+                        msg["content"], n_boxes, mode, box_coords
+                    )
+                    if status == "invalid_format":
+                        total_reward += REWARD_INVALID_FORMAT  # -1.0
+                    else:
+                        total_reward += REWARD_VALID_FORMAT  # +0.1
 
-            if not last_assistant:
-                rewards.append(REWARD_INVALID_FORMAT)  # -1.0
-                continue
-
-            # Check format (not the range, just the tag presence)
-            _, status = self._parse_box_answer(
-                last_assistant, n_boxes, mode, box_coords
-            )
-
-            if status == "invalid_format":
+            if not has_assistant:
                 rewards.append(REWARD_INVALID_FORMAT)  # -1.0
             else:
-                # Valid format (even if action is invalid_action or nobox)
-                rewards.append(REWARD_VALID_GUESS)  # 0.0
+                rewards.append(total_reward)
 
         return rewards
 
@@ -213,10 +227,14 @@ class SWMRubric(Rubric):
         self, completions: List[List[dict]], answer: List[str], **kwargs
     ) -> List[float]:
         """
-        Reward for box selection validity (valid range or valid coordinates).
+        Reward for box selection validity - summed across ALL turns.
 
-        Returns -1.0 if invalid (format invalid or out of range/no matching box).
-        Returns 0.0 if valid (in range 1 to n_boxes for text, or matches box for image).
+        Per-turn rewards:
+        - +0.1 for each turn with valid box selection
+        - -1.0 for each turn with invalid box (out-of-range or nobox)
+        - 0.0 for format errors (handled by turn_format_reward)
+
+        Returns sum of per-turn rewards for each trajectory.
         """
         rewards = []
         n_boxes = kwargs.get("n_boxes", self.n_boxes)
@@ -224,31 +242,20 @@ class SWMRubric(Rubric):
         box_coords = kwargs.get("box_coords", None)
 
         for trajectory in completions:
-            # Get last assistant message
-            last_assistant = None
-            for msg in reversed(trajectory):
+            total_reward = 0.0
+
+            for msg in trajectory:
                 if msg["role"] == "assistant":
-                    last_assistant = msg["content"]
-                    break
+                    box_id, status = self._parse_box_answer(
+                        msg["content"], n_boxes, mode, box_coords
+                    )
+                    if status == "valid":
+                        total_reward += REWARD_VALID_BOX  # +0.1
+                    elif status == "nobox" or status == "invalid_action":
+                        total_reward += REWARD_INVALID_ACTION  # -1.0
+                    # status == "invalid_format" -> 0.0 (handled by format reward)
 
-            if not last_assistant:
-                rewards.append(REWARD_INVALID_FORMAT)  # -1.0
-                continue
-
-            # Parse box
-            box_id, status = self._parse_box_answer(
-                last_assistant, n_boxes, mode, box_coords
-            )
-
-            if status == "valid":
-                # Valid box
-                rewards.append(REWARD_VALID_GUESS)  # 0.0
-            elif status == "nobox":
-                # Image mode: coordinate doesn't match a box
-                rewards.append(REWARD_NO_BOX)  # -1.0
-            else:
-                # Format invalid or action invalid
-                rewards.append(REWARD_INVALID_ACTION)  # -1.0
+            rewards.append(total_reward)
 
         return rewards
 
