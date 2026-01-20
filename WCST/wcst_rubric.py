@@ -3,21 +3,36 @@ WCST Rubric for multi-turn RL training.
 Defines turn-level and outcome-level reward functions compatible with TRL.
 """
 
+import os
+import sys
 import re
 from typing import List
 
-try:
-    from verifiers.rubrics.rubric import Rubric
-    from verifiers.parsers.xml_parser import XMLParser
-except ImportError:
-    raise ImportError(
-        "verifiers not installed. Install Multi-Turn-RL-Agent:\n"
-        "  cd /root/Multi-Turn-RL-Agent && pip install -e ."
-    )
+# Add parent directory to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Reward constants (matching wcst_env.py / wcst_verifiers_env.py)
+try:
+    from shared.rubrics import Rubric
+    from shared.parsers import XMLParser
+except ImportError:
+    # Fallback - define minimal base classes
+    class Rubric:
+        def __init__(self):
+            self.turn_reward_funcs = []
+            self.outcome_reward_funcs = []
+
+    class XMLParser:
+        def __init__(self, fields=None):
+            self.fields = fields or []
+
+
+# Reward constants (matching MT-GRPO paper reward design)
+# Turn-level: +0.1 for correct format (encourage exploration with valid format)
+# Outcome: +0.2 for correct format but wrong answer
 REWARD_CORRECT = 1.0
 REWARD_INCORRECT = 0.0
+REWARD_VALID_FORMAT = 0.1  # Small positive for correct format (MT-GRPO Section 5.2)
+REWARD_VALID_CHOICE = 0.1  # Small positive for valid choice range
 REWARD_INVALID_FORMAT = -1.0
 REWARD_INVALID_CHOICE = -1.0
 REWARD_PERSEVERATIVE_ERROR = -0.5
@@ -68,54 +83,61 @@ class WCSTRubric(Rubric):
     def turn_format_reward(
         self, completions: List[List[dict]], answer: List[str], **kwargs
     ) -> List[float]:
-        """Penalty for malformed <answer> tags.
+        """Reward for format compliance - summed across ALL turns.
 
-        Returns -1.0 when tags are missing/malformed, else 0.0.
+        Per-turn rewards:
+        - +0.1 for each turn with valid <answer> tags
+        - -1.0 for each turn with missing/malformed tags
+
+        Returns sum of per-turn rewards for each trajectory.
         """
         rewards = []
         for trajectory in completions:
-            last_assistant = None
-            for msg in reversed(trajectory):
+            total_reward = 0.0
+            has_assistant = False
+
+            for msg in trajectory:
                 if msg["role"] == "assistant":
-                    last_assistant = msg["content"]
-                    break
+                    has_assistant = True
+                    _, status = self._parse_choice(msg["content"])
+                    if status == "invalid_format":
+                        total_reward += REWARD_INVALID_FORMAT  # -1.0
+                    else:
+                        total_reward += REWARD_VALID_FORMAT  # +0.1
 
-            if not last_assistant:
-                rewards.append(REWARD_INVALID_FORMAT)
-                continue
-
-            _, status = self._parse_choice(last_assistant)
-            if status == "invalid_format":
+            if not has_assistant:
                 rewards.append(REWARD_INVALID_FORMAT)
             else:
-                rewards.append(0.0)
+                rewards.append(total_reward)
 
         return rewards
 
     def turn_choice_validity_reward(
         self, completions: List[List[dict]], answer: List[str], **kwargs
     ) -> List[float]:
-        """Penalty for out-of-range choices (not 1-4).
+        """Reward for valid choice range (1-4) - summed across ALL turns.
 
-        Returns -1.0 for invalid_choice, 0.0 otherwise. Format errors are handled by turn_format_reward.
+        Per-turn rewards:
+        - +0.1 for each turn with valid choice (1-4)
+        - -1.0 for each turn with out-of-range choice
+        - 0.0 for format errors (handled by turn_format_reward)
+
+        Returns sum of per-turn rewards for each trajectory.
         """
         rewards = []
         for trajectory in completions:
-            last_assistant = None
-            for msg in reversed(trajectory):
+            total_reward = 0.0
+
+            for msg in trajectory:
                 if msg["role"] == "assistant":
-                    last_assistant = msg["content"]
-                    break
+                    _, status = self._parse_choice(msg["content"])
+                    if status == "valid":
+                        total_reward += REWARD_VALID_CHOICE  # +0.1
+                    elif status == "invalid_choice":
+                        total_reward += REWARD_INVALID_CHOICE  # -1.0
+                    # status == "invalid_format" -> 0.0 (handled by format reward)
 
-            if not last_assistant:
-                rewards.append(0.0)
-                continue
-
-            _, status = self._parse_choice(last_assistant)
-            if status == "invalid_choice":
-                rewards.append(REWARD_INVALID_CHOICE)
-            else:
-                rewards.append(0.0)
+            rewards.append(total_reward)
 
         return rewards
 
@@ -186,7 +208,24 @@ class WCSTRubric(Rubric):
         is_failure_flag = kwargs.get("is_failure_to_maintain", False)
         is_persev_flag = kwargs.get("is_perseverative_error", False)
 
+        # Handle None or missing correct_answers
+        if correct_answers is None:
+            correct_answers = [None] * len(completions)
+        elif not isinstance(correct_answers, (list, tuple)):
+            correct_answers = [correct_answers] * len(completions)
+
+        # Ensure correct_answers matches completions length
+        if len(correct_answers) < len(completions):
+            correct_answers = list(correct_answers) + [None] * (
+                len(completions) - len(correct_answers)
+            )
+
         for idx, (trajectory, expected) in enumerate(zip(completions, correct_answers)):
+            # Skip if no expected answer
+            if expected is None:
+                rewards.append(0.0)
+                continue
+
             last_assistant = None
             for msg in reversed(trajectory):
                 if msg["role"] == "assistant":
