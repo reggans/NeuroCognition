@@ -2,7 +2,7 @@ from abc import abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 import random
 import time
-from typing import List, Dict, Sequence, Any, Union, Tuple
+from typing import List, Dict, Sequence, Any, Union, Tuple, Optional
 
 from datasets import Dataset
 from trl.trainer.grpo_trainer import RewardFunc
@@ -14,7 +14,127 @@ except ImportError:
     LLM = None
     SamplingParams = None
 
+# Import VLLMClient for server mode
+try:
+    from trl.extras.vllm_client import VLLMClient
+except ImportError:
+    VLLMClient = None
+
 from .environment import Environment
+
+
+class VLLMServerAdapter:
+    """Adapter to make VLLMClient.chat() behave like LLM.chat() for multi-turn generation.
+
+    In server mode, VLLMClient.chat() returns dict with 'prompt_ids', 'completion_ids', 'logprobs'.
+    We need to simulate the behavior of vLLM's LLM.chat() which returns RequestOutput objects.
+    """
+
+    def __init__(
+        self,
+        vllm_client: "VLLMClient",
+        tokenizer: Any,
+        max_tokens: int = 4096,
+        temperature: float = 1.0,
+        top_p: float = 1.0,
+        top_k: int = -1,
+        min_p: float = 0.0,
+        repetition_penalty: float = 1.0,
+    ):
+        self.client = vllm_client
+        self.tokenizer = tokenizer
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+        self.top_p = top_p
+        self.top_k = top_k
+        self.min_p = min_p
+        self.repetition_penalty = repetition_penalty
+
+    def chat(
+        self,
+        messages_list: List[List[Dict[str, Any]]],
+        sampling_params: Optional[Any] = None,
+        use_tqdm: bool = False,
+    ) -> List["MockRequestOutput"]:
+        """Simulate LLM.chat() using VLLMClient.chat()."""
+        # Extract sampling params
+        max_tokens = sampling_params.max_tokens if sampling_params else self.max_tokens
+        temperature = (
+            sampling_params.temperature if sampling_params else self.temperature
+        )
+        top_p = sampling_params.top_p if sampling_params else self.top_p
+        top_k = (
+            getattr(sampling_params, "top_k", self.top_k)
+            if sampling_params
+            else self.top_k
+        )
+        min_p = (
+            getattr(sampling_params, "min_p", self.min_p)
+            if sampling_params
+            else self.min_p
+        )
+        repetition_penalty = (
+            getattr(sampling_params, "repetition_penalty", self.repetition_penalty)
+            if sampling_params
+            else self.repetition_penalty
+        )
+
+        # Call VLLMClient.chat()
+        response = self.client.chat(
+            messages=messages_list,
+            n=1,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k if top_k is not None else -1,
+            min_p=min_p if min_p is not None else 0.0,
+            repetition_penalty=repetition_penalty,
+        )
+
+        # Convert response to MockRequestOutput objects
+        prompt_ids = response.get("prompt_ids", [])
+        completion_ids = response.get("completion_ids", [])
+        logprobs = response.get("logprobs", [])
+
+        outputs = []
+        for i, (p_ids, c_ids) in enumerate(zip(prompt_ids, completion_ids)):
+            # Decode completion text
+            completion_text = self.tokenizer.decode(c_ids, skip_special_tokens=False)
+            outputs.append(
+                MockRequestOutput(
+                    prompt_token_ids=p_ids,
+                    completion_token_ids=c_ids,
+                    completion_text=completion_text,
+                    logprobs=logprobs[i] if i < len(logprobs) else [],
+                )
+            )
+
+        return outputs
+
+
+class MockCompletionOutput:
+    """Mock vLLM CompletionOutput for server mode compatibility."""
+
+    def __init__(self, token_ids: List[int], text: str, logprobs: List[float] = None):
+        self.token_ids = token_ids
+        self.text = text
+        self.logprobs = logprobs or []
+
+
+class MockRequestOutput:
+    """Mock vLLM RequestOutput for server mode compatibility."""
+
+    def __init__(
+        self,
+        prompt_token_ids: List[int],
+        completion_token_ids: List[int],
+        completion_text: str,
+        logprobs: List[float] = None,
+    ):
+        self.prompt_token_ids = prompt_token_ids
+        self.outputs = [
+            MockCompletionOutput(completion_token_ids, completion_text, logprobs)
+        ]
 
 
 class MultiTurnEnv(Environment):
@@ -26,6 +146,7 @@ class MultiTurnEnv(Environment):
         mask_env_response: bool = True,
         max_workers: int = 10,
         max_steps: int = 10,
+        max_episode_tokens: int = 32768,  # Total tokens for entire episode (default: model context)
         sleep_time: float = 1.0,
         **kwargs,
     ):
@@ -42,6 +163,7 @@ class MultiTurnEnv(Environment):
         self.max_workers = max_workers
         self.sleep_time = sleep_time
         self.max_steps = max_steps
+        self.max_episode_tokens = max_episode_tokens  # Episode token budget
 
     def get_dataset(self, **kwargs: Any) -> Dataset | None:
         pass
@@ -99,10 +221,29 @@ class MultiTurnEnv(Environment):
                 len(state["prompt_ids"]) :
             ]
 
-            if self.is_completed(state["messages"]) or len(state["completion_ids"]) > sampling_params.max_tokens:  # type: ignore
+            # Safeguard: ensure mask and ids have same length
+            if len(state["completion_mask"]) < len(state["completion_ids"]):
+                # Pad mask with 1s for any missing tokens
+                diff = len(state["completion_ids"]) - len(state["completion_mask"])
+                state["completion_mask"].extend([1] * diff)
+            elif len(state["completion_mask"]) > len(state["completion_ids"]):
+                # Truncate mask to match ids
+                state["completion_mask"] = state["completion_mask"][
+                    : len(state["completion_ids"])
+                ]
+
+            # Check episode completion:
+            # 1. Task-level completion (is_completed returns True)
+            # 2. Episode token budget exceeded (max_episode_tokens)
+            # Note: sampling_params.max_tokens is for per-turn generation, not episode limit
+            if (
+                self.is_completed(state["messages"])
+                or len(state["completion_ids"]) > self.max_episode_tokens
+            ):
                 state["completed"] = True
+                # Truncate to episode token budget
                 state["completion_ids"] = state["completion_ids"][
-                    : sampling_params.max_tokens
+                    : self.max_episode_tokens
                 ]
                 state["completion_mask"] = state["completion_mask"][
                     : len(state["completion_ids"])
@@ -110,13 +251,19 @@ class MultiTurnEnv(Environment):
             else:
                 state["messages"].append(self.env_response(state["messages"]))
 
-            if not len(state["completion_mask"]) == len(state["completion_ids"]):
-                print(state["messages"])
-                print(state["completion_mask"])
-                print(state["completion_ids"])
-                raise ValueError(
-                    f"Completion mask and completion ids are not the same length for state {j}"
-                )
+                # Re-check completion after environment response in case
+                # the env_response itself signals episode termination.
+                if (
+                    self.is_completed(state["messages"])
+                    or len(state["completion_ids"]) > self.max_episode_tokens
+                ):
+                    state["completed"] = True
+                    state["completion_ids"] = state["completion_ids"][
+                        : self.max_episode_tokens
+                    ]
+                    state["completion_mask"] = state["completion_mask"][
+                        : len(state["completion_ids"])
+                    ]
 
             return j, state
 
@@ -194,6 +341,10 @@ class MultiTurnEnv(Environment):
                 state["completed"] = True
             else:
                 state["messages"].append(self.env_response(state["messages"]))
+
+            # Re-check after env response in case env_response triggers completion
+            if self.is_completed(state["messages"]):
+                state["completed"] = True
 
             return j, state
 
@@ -277,6 +428,11 @@ class MultiTurnEnv(Environment):
                 # If not done, get and add environment response
                 env_msg = self.env_response(messages_copy)
                 messages_copy.append(env_msg)
+
+                # Re-check completion after env response in case the env message
+                # indicates the episode is finished.
+                if self.is_completed(messages_copy):
+                    rollout_is_completed = True
 
             return messages_copy, rollout_is_completed
 
