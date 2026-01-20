@@ -176,6 +176,7 @@ wandb/
 # outputs and logs
 outputs/
 logs/
+models/
 
 data*/
 wcst_data*/
