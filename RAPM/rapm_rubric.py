@@ -8,17 +8,26 @@ Supports:
 - Text-Gen: same as text-MC but generates strings instead of selecting from options
 """
 
+import os
+import sys
 import re
 from typing import List
 
+# Add parent directory to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 try:
-    from verifiers.rubrics.rubric import Rubric
-    from verifiers.parsers.xml_parser import XMLParser
+    from shared.rubrics import Rubric
+    from shared.parsers import XMLParser
 except ImportError:
-    raise ImportError(
-        "verifiers not installed. Install Multi-Turn-RL-Agent:\n"
-        "  cd /root/Multi-Turn-RL-Agent && pip install -e ."
-    )
+    class Rubric:
+        def __init__(self):
+            self.turn_reward_funcs = []
+            self.outcome_reward_funcs = []
+    
+    class XMLParser:
+        def __init__(self, fields=None):
+            self.fields = fields or []
 
 # Import existing validators from the RAPM module
 try:
@@ -29,12 +38,14 @@ except ImportError:
     cell_satisfies = None
     constraint_violations = None
 
-# Reward constants (matching rapm_env.py)
+# Reward constants (matching MT-GRPO paper reward design)
+# Turn-level: +0.1 for correct format (encourage exploration with valid format)
 REWARD_CORRECT = 1.0
+REWARD_VALID_FORMAT = 0.1  # Small positive for correct format (MT-GRPO Section 5.2)
 REWARD_WRONG_MULTITURN = -0.1
 REWARD_CONSTRAINT_VIOLATION = -0.1
 REWARD_MAX_TURNS_FAILED = -1.0
-REWARD_INVALID_FORMAT = -0.5
+REWARD_INVALID_FORMAT = -1.0
 
 
 class RAPMRubric(Rubric):
@@ -138,6 +149,65 @@ class RAPMRubric(Rubric):
 
     # ========== TURN-LEVEL REWARDS ==========
 
+    def turn_correctness_reward(
+        self, completions: List[List[dict]], answer: List[str], **kwargs
+    ) -> List[float]:
+        """
+        Turn-level reward for correct answers: +1.0 if correct.
+
+        When the answer is correct, episode ends immediately.
+
+        Args:
+            completions: List[List[Dict]]  # Trajectories
+            answer: List[str]  # Expected answers
+            **kwargs: mode, answer_mode
+
+        Returns:
+            List[float]  # +1.0 for correct, 0.0 otherwise
+        """
+        rewards = []
+        mode = kwargs.get("mode", self.mode)
+        answer_mode = kwargs.get("answer_mode", self.answer_mode)
+
+        for trajectory, expected in zip(completions, answer):
+            # Get last assistant message
+            last_assistant = None
+            for msg in reversed(trajectory):
+                if msg["role"] == "assistant":
+                    last_assistant = msg["content"]
+                    break
+
+            if not last_assistant:
+                rewards.append(0.0)
+                continue
+
+            # Parse answer based on mode
+            if mode == "image" or answer_mode == "mc":
+                pred = self._parse_numeric_answer(last_assistant)
+                if pred is None:
+                    rewards.append(0.0)
+                    continue
+
+                try:
+                    gold = int(expected)
+                    is_correct = pred == gold
+                except (ValueError, TypeError):
+                    is_correct = False
+
+                rewards.append(REWARD_CORRECT if is_correct else 0.0)
+            else:
+                # Text-gen mode
+                pred = self._parse_string_answer(last_assistant)
+                if pred is None:
+                    rewards.append(0.0)
+                    continue
+
+                cell_constraint = kwargs.get("cell_constraint")
+                is_correct = self._check_text_gen_correct(pred, cell_constraint)
+                rewards.append(REWARD_CORRECT if is_correct else 0.0)
+
+        return rewards
+
     def turn_wrong_answer_penalty(
         self, completions: List[List[dict]], answer: List[str], **kwargs
     ) -> List[float]:
@@ -215,43 +285,46 @@ class RAPMRubric(Rubric):
         self, completions: List[List[dict]], answer: List[str], **kwargs
     ) -> List[float]:
         """
-        Turn-level penalty for invalid answer format.
+        Reward/penalty for answer format validity in ANY turn.
 
-        -0.5 for responses without proper <answer> tags or unparseable answers.
+        Evaluates ALL assistant turns:
+        - Returns +0.1 if ALL turns have valid <answer> tags
+        - Returns -1.0 if ANY turn has invalid format
 
         Args:
             completions: List[List[Dict]]  # Trajectories
             answer: List[str]  # Not used
 
         Returns:
-            List[float]  # Penalty per example
+            List[float]  # Reward/penalty per example
         """
         rewards = []
         mode = kwargs.get("mode", self.mode)
         answer_mode = kwargs.get("answer_mode", self.answer_mode)
 
         for trajectory in completions:
-            # Get last assistant message
-            last_assistant = None
-            for msg in reversed(trajectory):
+            all_valid = True
+            has_assistant = False
+
+            for msg in trajectory:
                 if msg["role"] == "assistant":
-                    last_assistant = msg["content"]
-                    break
+                    has_assistant = True
+                    # Check if answer is parseable
+                    if mode == "image" or answer_mode == "mc":
+                        pred = self._parse_numeric_answer(msg["content"])
+                    else:
+                        pred = self._parse_string_answer(msg["content"])
 
-            if not last_assistant:
+                    if pred is None:
+                        all_valid = False
+                        break
+
+            if not has_assistant:
                 rewards.append(REWARD_INVALID_FORMAT)
-                continue
-
-            # Check if answer is parseable
-            if mode == "image" or answer_mode == "mc":
-                pred = self._parse_numeric_answer(last_assistant)
+            elif not all_valid:
+                rewards.append(REWARD_INVALID_FORMAT)
             else:
-                pred = self._parse_string_answer(last_assistant)
-
-            if pred is None:
-                rewards.append(REWARD_INVALID_FORMAT)  # -0.5
-            else:
-                rewards.append(0.0)  # Valid format
+                rewards.append(REWARD_VALID_FORMAT)  # +0.1 for all valid
 
         return rewards
 
@@ -386,8 +459,8 @@ class RAPMRubric(Rubric):
         Called after each step to provide immediate feedback.
         """
         return [
-            self.turn_wrong_answer_penalty,
-            self.turn_invalid_format_penalty,
+            self.turn_wrong_answer_penalty,  # -0.1 for wrong answer
+            self.turn_invalid_format_penalty,  # -1.0 for invalid format
         ]
 
     @property
@@ -395,8 +468,9 @@ class RAPMRubric(Rubric):
         """
         Outcome-level reward functions.
         Called at episode end to evaluate overall performance.
+        +1.0 for correct answer (episode ends immediately on correct).
         """
         return [
-            self.outcome_correctness_reward,
-            self.outcome_max_turns_failure,
+            self.outcome_correctness_reward,  # +1.0 for correct answer
+            self.outcome_max_turns_failure,  # -1.0 if max turns without success
         ]
