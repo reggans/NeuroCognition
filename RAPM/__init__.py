@@ -1,15 +1,16 @@
-"""
-Raven's Progressive Matrices (RAPM) module.
-"""
+"""Raven's Progressive Matrices (RAPM) module."""
 
-from .rapm_evaluation import run_rapm_evaluation, run_text_rapm_evaluation, run_rapm_with_env
-from .rapm_env import RAPMEnv, RAPMQuestion, RAPMDatasetEnv
+from .rapm_mt_env import load_environment, RAPMMultiTurnEnv
+from .rapm_rubric import RAPMRubric
+from .rapm_utils import (
+    extract_reasoning_and_answer,
+    parse_text_mc,
+)
 
 __all__ = [
-    'run_rapm_evaluation',
-    'run_text_rapm_evaluation',
-    'run_rapm_with_env',
-    'RAPMEnv',
-    'RAPMQuestion',
-    'RAPMDatasetEnv',
+    "load_environment",
+    "RAPMMultiTurnEnv",
+    "RAPMRubric",
+    "extract_reasoning_and_answer",
+    "parse_text_mc",
 ]
