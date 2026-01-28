@@ -44,9 +44,22 @@ class WCSTRubric(Rubric):
     """
     Rubric for Wisconsin Card Sorting Test.
 
-    Supports:
-    - Turn-level rewards: per-choice correctness and format
-    - Outcome rewards: final accuracy and rule detection
+    Turn-level rewards (4 functions) - SUMMED across all turns:
+    1. turn_format_reward: +0.1 per valid format, -1.0 per invalid
+    2. turn_choice_validity_reward: +0.1 per valid choice (1-4), -1.0 per out-of-range
+    3. turn_repeat_reward: -1.0 per repeated INCORRECT choice in current rule cycle
+    4. turn_correctness_reward: +1.0 per correct, -0.5 per failure-to-maintain-set,
+       -0.5 per perseverative error
+
+    State reconstruction: Functions 3-4 parse USER feedback messages in the trajectory
+    to reconstruct per-turn state:
+    - Track consecutive_correct for failure-to-maintain-set (error after 2+ correct)
+    - Track rule changes (5 consecutive correct)
+    - Track previous rule's correct choice for perseverative error detection
+
+    Outcome-level rewards:
+    - outcome_completed_categories: fraction of completed rule cycles
+    - outcome_error_ratio: -(perseverative_errors + failures) / n_trials
     """
 
     def __init__(self):
@@ -144,145 +157,153 @@ class WCSTRubric(Rubric):
     def turn_repeat_reward(
         self, completions: List[List[dict]], answer: List[str], **kwargs
     ) -> List[float]:
-        """Penalty for repeating a choice within the current rule/trial.
+        """Penalty for repeating a choice within the current rule cycle - summed across ALL turns.
 
-        Expects `seen_options` (set) or `prev_choices_in_trial` (list) in kwargs.
-        Returns -1.0 if repeated, else 0.0.
+        A repeated choice is only penalized when:
+        1. The same option was chosen before in the current rule cycle
+        2. The previous same choice was INCORRECT
+
+        State reconstruction from trajectory:
+        - Track seen_options_this_rule: set of choices made in current rule
+        - Reset when we detect a rule change (5 consecutive correct)
+        - Reset when a choice is correct (fresh exploration context per WCST rules)
+
+        Per-turn rewards:
+        - -1.0 for repeating a choice that was previously incorrect in current rule
+        - 0.0 otherwise
+
+        Returns sum of per-turn rewards for each trajectory.
         """
         rewards = []
-        seen_options = kwargs.get("seen_options", set())
-        prev_choices = kwargs.get("prev_choices_in_trial", [])
+        num_correct_for_rule_change = kwargs.get("num_correct", 5)
 
-        for idx, trajectory in enumerate(completions):
-            last_assistant = None
-            for msg in reversed(trajectory):
-                if msg["role"] == "assistant":
-                    last_assistant = msg["content"]
-                    break
+        for trajectory in completions:
+            total_reward = 0.0
 
-            if not last_assistant:
-                rewards.append(0.0)
-                continue
+            # Track choices seen in current rule cycle that were INCORRECT
+            seen_incorrect_choices: set = set()
+            consecutive_correct = 0
 
-            choice, status = self._parse_choice(last_assistant)
-            if status != "valid" or choice is None:
-                rewards.append(0.0)
-                continue
+            # Process trajectory turn by turn
+            for i, msg in enumerate(trajectory):
+                if msg["role"] != "assistant":
+                    continue
 
-            # Allow per-example state if lists are provided
-            if isinstance(seen_options, list):
-                seen_set = seen_options[idx] if idx < len(seen_options) else set()
-            else:
-                seen_set = seen_options
+                choice, status = self._parse_choice(msg["content"])
+                if status != "valid" or choice is None:
+                    consecutive_correct = 0  # Reset on invalid
+                    continue
 
-            if (
-                isinstance(prev_choices, list)
-                and prev_choices
-                and isinstance(prev_choices[0], list)
-            ):
-                prev_list = prev_choices[idx] if idx < len(prev_choices) else []
-            else:
-                prev_list = prev_choices
+                # Look at the NEXT message (USER response) to determine outcome
+                if i + 1 < len(trajectory) and trajectory[i + 1]["role"] == "user":
+                    user_response = trajectory[i + 1]["content"].lower()
 
-            already_seen = choice in seen_set or choice in prev_list
-            rewards.append(REWARD_REPEATED if already_seen else 0.0)
+                    is_correct = "correct!" in user_response and "incorrect" not in user_response
+
+                    # Check if this is a repeat of a previously incorrect choice
+                    if choice in seen_incorrect_choices:
+                        total_reward += REWARD_REPEATED  # -1.0
+
+                    if is_correct:
+                        consecutive_correct += 1
+                        # Reset seen choices on correct (fresh exploration context)
+                        seen_incorrect_choices = set()
+
+                        # Check for rule change
+                        if consecutive_correct >= num_correct_for_rule_change:
+                            consecutive_correct = 0
+                            seen_incorrect_choices = set()
+                    else:
+                        # Incorrect - add to seen choices, reset consecutive
+                        seen_incorrect_choices.add(choice)
+                        consecutive_correct = 0
+
+            rewards.append(total_reward)
 
         return rewards
 
     def turn_correctness_reward(
         self, completions: List[List[dict]], answer: List[str], **kwargs
     ) -> List[float]:
-        """Base correctness reward plus WCST-specific penalties.
+        """Correctness reward with WCST-specific error penalties - summed across ALL turns.
 
-        - +1.0 if correct
-        - 0.0 if incorrect (base), with additional penalties:
-            * -0.5 failure-to-maintain-set if consecutive_correct >= 2 (state) or flag provided
-            * -0.5 perseverative error if flagged
+        Per-turn rewards:
+        - +1.0 for correct answer
+        - 0.0 for incorrect answer (base)
+        - -0.5 for failure-to-maintain-set (error after 2+ consecutive correct)
+        - -0.5 for perseverative error (repeating previous "correct pattern" after rule change)
 
-        Expects either `answer` list of correct indices or `correct_answers` kwarg.
-        Also consumes state/flags: consecutive_correct, is_failure_to_maintain, is_perseverative_error.
+        State reconstruction from trajectory:
+        - Track consecutive_correct count
+        - Detect rule changes (5 consecutive correct)
+        - Track last_correct_choice_before_rule_change for perseverative detection
+
+        Note on perseverative error detection:
+        Since we don't have explicit rule info in trajectory, we approximate by checking
+        if the model repeats the same choice that was "working" (last correct) before
+        the rule changed, and that choice is now incorrect.
+
+        Returns sum of per-turn rewards for each trajectory.
         """
         rewards = []
-        correct_answers = kwargs.get("correct_answers", answer)
-        consecutive_correct_state = kwargs.get("consecutive_correct", 0)
-        is_failure_flag = kwargs.get("is_failure_to_maintain", False)
-        is_persev_flag = kwargs.get("is_perseverative_error", False)
+        num_correct_for_rule_change = kwargs.get("num_correct", 5)
 
-        # Handle None or missing correct_answers
-        if correct_answers is None:
-            correct_answers = [None] * len(completions)
-        elif not isinstance(correct_answers, (list, tuple)):
-            correct_answers = [correct_answers] * len(completions)
+        for trajectory in completions:
+            total_reward = 0.0
 
-        # Ensure correct_answers matches completions length
-        if len(correct_answers) < len(completions):
-            correct_answers = list(correct_answers) + [None] * (
-                len(completions) - len(correct_answers)
-            )
+            consecutive_correct = 0
+            last_correct_choice = None  # The last choice that was correct
+            previous_rule_correct_choice = None  # Choice that was correct under previous rule
+            rule_just_changed = False
 
-        for idx, (trajectory, expected) in enumerate(zip(completions, correct_answers)):
-            # Skip if no expected answer
-            if expected is None:
-                rewards.append(0.0)
-                continue
+            # Process trajectory turn by turn
+            for i, msg in enumerate(trajectory):
+                if msg["role"] != "assistant":
+                    continue
 
-            last_assistant = None
-            for msg in reversed(trajectory):
-                if msg["role"] == "assistant":
-                    last_assistant = msg["content"]
-                    break
+                choice, status = self._parse_choice(msg["content"])
+                if status != "valid" or choice is None:
+                    consecutive_correct = 0
+                    continue
 
-            if not last_assistant:
-                rewards.append(0.0)
-                continue
+                # Look at the NEXT message (USER response) to determine outcome
+                if i + 1 < len(trajectory) and trajectory[i + 1]["role"] == "user":
+                    user_response = trajectory[i + 1]["content"].lower()
 
-            choice, status = self._parse_choice(last_assistant)
-            if status != "valid" or choice is None:
-                rewards.append(0.0)
-                continue
+                    is_correct = "correct!" in user_response and "incorrect" not in user_response
 
-            try:
-                expected_int = int(expected)
-            except (ValueError, TypeError):
-                rewards.append(0.0)
-                continue
+                    if is_correct:
+                        total_reward += REWARD_CORRECT  # +1.0
+                        consecutive_correct += 1
+                        last_correct_choice = choice
+                        rule_just_changed = False
 
-            if choice == expected_int:
-                rewards.append(REWARD_CORRECT)
-                continue
+                        # Check for rule change
+                        if consecutive_correct >= num_correct_for_rule_change:
+                            # Rule is about to change
+                            previous_rule_correct_choice = last_correct_choice
+                            consecutive_correct = 0
+                            rule_just_changed = True
+                    else:
+                        # Incorrect answer - check for WCST-specific errors
 
-            # Incorrect path
-            reward = REWARD_INCORRECT
+                        # Failure to Maintain Set: error after 2+ consecutive correct
+                        if consecutive_correct >= 2:
+                            total_reward += REWARD_FAILURE_TO_MAINTAIN_SET  # -0.5
 
-            # Failure to maintain set: env uses >=2 consecutive correct before the error
-            if isinstance(consecutive_correct_state, list):
-                cc_val = (
-                    consecutive_correct_state[idx]
-                    if idx < len(consecutive_correct_state)
-                    else 0
-                )
-            else:
-                cc_val = consecutive_correct_state
+                        # Perseverative Error: repeating previous rule's correct choice after rule change
+                        # Skip penalty on the FIRST trial after rule change (model hasn't had feedback yet)
+                        if (
+                            previous_rule_correct_choice is not None
+                            and choice == previous_rule_correct_choice
+                            and not rule_just_changed
+                        ):
+                            total_reward += REWARD_PERSEVERATIVE_ERROR  # -0.5
 
-            failure_flag = (
-                is_failure_flag[idx]
-                if isinstance(is_failure_flag, list) and idx < len(is_failure_flag)
-                else is_failure_flag
-            )
-            persev_flag = (
-                is_persev_flag[idx]
-                if isinstance(is_persev_flag, list) and idx < len(is_persev_flag)
-                else is_persev_flag
-            )
+                        consecutive_correct = 0
+                        rule_just_changed = False
 
-            if failure_flag or cc_val >= 2:
-                reward += REWARD_FAILURE_TO_MAINTAIN_SET
-
-            # Perseverative error: rely on flag passed from state (env should detect)
-            if persev_flag:
-                reward += REWARD_PERSEVERATIVE_ERROR
-
-            rewards.append(reward)
+            rewards.append(total_reward)
 
         return rewards
 

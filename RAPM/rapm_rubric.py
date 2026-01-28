@@ -46,15 +46,25 @@ REWARD_WRONG_MULTITURN = -0.1
 REWARD_CONSTRAINT_VIOLATION = -0.1
 REWARD_MAX_TURNS_FAILED = -1.0
 REWARD_INVALID_FORMAT = -1.0
+REWARD_REPEATED = -0.5  # Penalty for repeating same wrong answer
 
 
 class RAPMRubric(Rubric):
     """
     Rubric for Raven's Progressive Matrices (RAPM).
 
-    Reward structure matching rapm_env.py:
-    - Turn-level: -0.1 per wrong (image) or -0.1 × violations (text); -0.5 invalid format
-    - Outcome-level: +1.0 correct; -1.0 additional if max_turns reached without success
+    Turn-level rewards (3 functions) - SUMMED across all turns:
+    1. turn_wrong_answer_penalty: -0.1 per wrong (image) or -0.1 × violations (text)
+    2. turn_invalid_format_penalty: +0.1 if all valid, -1.0 if any invalid
+    3. turn_repeat_penalty: -0.5 for repeating a previously wrong answer
+
+    State reconstruction: turn_repeat_penalty parses USER feedback messages:
+    - "Incorrect" indicates wrong answer - track it in wrong_answers_seen set
+    - Subsequent same answer -> -0.5 penalty
+
+    Outcome-level rewards:
+    - outcome_correctness_reward: +1.0 if correct
+    - outcome_max_turns_failure: -1.0 if max turns reached without success
     """
 
     def __init__(self, mode: str = "image", answer_mode: str = "mc"):
@@ -328,6 +338,66 @@ class RAPMRubric(Rubric):
 
         return rewards
 
+    def turn_repeat_penalty(
+        self, completions: List[List[dict]], answer: List[str], **kwargs
+    ) -> List[float]:
+        """
+        Penalty for repeating the same wrong answer - summed across ALL turns.
+
+        Per-turn rewards:
+        - -0.5 for repeating a previously wrong answer
+        - 0.0 for trying a new answer (even if wrong)
+
+        State is reconstructed by parsing USER feedback messages in the trajectory:
+        - "Incorrect" indicates wrong answer - track it
+        - Subsequent same answer while still wrong -> penalty
+
+        Note: For text-gen mode, we compare string answers directly.
+        For MC mode (image or text-mc), we compare numeric choices.
+
+        Returns sum of per-turn penalties for each trajectory.
+        """
+        rewards = []
+        mode = kwargs.get("mode", self.mode)
+        answer_mode = kwargs.get("answer_mode", self.answer_mode)
+
+        for trajectory in completions:
+            total_penalty = 0.0
+
+            # Track wrong answers seen so far (to detect repeats)
+            wrong_answers_seen: set = set()
+
+            # Process trajectory turn by turn
+            for i, msg in enumerate(trajectory):
+                if msg["role"] != "assistant":
+                    continue
+
+                # Parse the answer from this assistant message
+                if mode == "image" or answer_mode == "mc":
+                    pred = self._parse_numeric_answer(msg["content"])
+                else:
+                    pred = self._parse_string_answer(msg["content"])
+
+                if pred is None:
+                    # Invalid format handled by other reward function
+                    continue
+
+                # Look at the NEXT message (USER response) to determine outcome
+                if i + 1 < len(trajectory) and trajectory[i + 1]["role"] == "user":
+                    user_response = trajectory[i + 1]["content"].lower()
+
+                    if "incorrect" in user_response:
+                        # Wrong answer - check if it's a repeat
+                        if pred in wrong_answers_seen:
+                            total_penalty += REWARD_REPEATED  # -0.5
+                        # Add to seen (even if already there)
+                        wrong_answers_seen.add(pred)
+                    # Note: "Correct" ends episode, so no need to reset
+
+            rewards.append(total_penalty)
+
+        return rewards
+
     # ========== OUTCOME REWARDS ==========
 
     def outcome_correctness_reward(
@@ -461,6 +531,7 @@ class RAPMRubric(Rubric):
         return [
             self.turn_wrong_answer_penalty,  # -0.1 for wrong answer
             self.turn_invalid_format_penalty,  # -1.0 for invalid format
+            self.turn_repeat_penalty,  # -0.5 for repeating same wrong answer
         ]
 
     @property

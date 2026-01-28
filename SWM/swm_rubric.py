@@ -56,8 +56,16 @@ class SWMRubric(Rubric):
     Turn-level rewards (4 functions) - SUMMED across all turns:
     1. turn_format_reward: +0.1 per valid format, -1.0 per invalid
     2. turn_box_validity_reward: +0.1 per valid box, -1.0 per invalid
-    3. turn_box_legality_reward: -0.5 per illegal/repeated, 0.0 per legal
-    4. turn_token_found_reward: +1.0 per token found, 0.0 per empty
+    3. turn_box_legality_reward: Penalizes illegal box selections
+       - -0.5 for repeated box (same box opened again in current search)
+       - -0.5 for exhausted box (box has had ALL token types found in it)
+    4. turn_token_found_reward: +1.0 per token found (detected from USER feedback)
+
+    State reconstruction: Functions 3-4 parse USER feedback messages in the trajectory:
+    - "Token X found in box Y!" → token found, start new search, update box_token_history
+    - "No tokens found in box Y" → empty box, legal move
+    - "already opened box" → repeated box in current search
+    - Exhausted detection: box_token_history[box_id] contains all n_tokens token types
 
     Outcome-level rewards (2 functions):
     1. outcome_total_tokens_found: Tf / T (where T = n_boxes * n_tokens), [0.0-1.0]
@@ -263,60 +271,102 @@ class SWMRubric(Rubric):
         self, completions: List[List[dict]], answer: List[str], **kwargs
     ) -> List[float]:
         """
-        Reward for box legality (not repeated, not already exhausted).
+        Reward for box legality - summed across ALL turns.
 
-        Returns -0.5 if:
-        - Box was already opened in current search (repeated)
-        - Box is illegal (no token types can be in this box)
-        Returns 0.0 if legal.
+        A box is ILLEGAL in two cases:
+        1. Repeated: Box was already opened in the current search (within-search repeat)
+        2. Exhausted: Box has already had ALL token types found in it across searches
+           (i.e., it is IMPOSSIBLE for this box to contain any token)
 
-        Requires state information passed via kwargs.
+        Per-turn rewards:
+        - -0.5 for repeated box (detected from "already opened box" in USER feedback)
+        - -0.5 for exhausted box (detected by tracing all "Token X found in box Y"
+          messages and tracking which boxes have had all token types found)
+        - 0.0 for legal moves
+
+        State reconstruction:
+        - Track `box_token_history[box_id] = set of tokens found there`
+        - A box is exhausted when len(box_token_history[box_id]) == n_tokens
+        - Reset `opened_boxes` set when any token is found (new search begins)
+
+        Returns sum of per-turn rewards for each trajectory.
         """
         rewards = []
-        opened_boxes = kwargs.get("opened_boxes", set())
-        legal_boxes = kwargs.get("legal_boxes", {})
         n_boxes = kwargs.get("n_boxes", self.n_boxes)
+        n_tokens = kwargs.get("n_tokens", self.n_tokens)
         mode = kwargs.get("mode", self.mode)
         box_coords = kwargs.get("box_coords", None)
 
+        # Get token names (A, B, C, ... or color names for image mode)
+        # Default to uppercase letters
+        token_names = kwargs.get("tokens", None)
+        if token_names is None:
+            import string
+            token_names = [string.ascii_uppercase[i] for i in range(n_tokens)]
+
         for trajectory in completions:
-            # Get last assistant message
-            last_assistant = None
-            for msg in reversed(trajectory):
-                if msg["role"] == "assistant":
-                    last_assistant = msg["content"]
-                    break
+            total_reward = 0.0
 
-            if not last_assistant:
-                rewards.append(REWARD_VALID_GUESS)  # 0.0
-                continue
+            # Track which tokens have been found in each box across ALL searches
+            # box_token_history[box_id] = set of token names found there
+            box_token_history: dict = {}  # Dict[int, Set[str]]
 
-            # Parse box
-            box_id, status = self._parse_box_answer(
-                last_assistant, n_boxes, mode, box_coords
-            )
+            # Track boxes opened in the CURRENT search (resets when token found)
+            opened_boxes_current_search: set = set()
 
-            if status != "valid" or box_id is None:
-                # Format or validity error handled by other rewards
-                rewards.append(REWARD_VALID_GUESS)  # 0.0
-                continue
+            # Process trajectory turn by turn
+            for i, msg in enumerate(trajectory):
+                if msg["role"] != "assistant":
+                    continue
 
-            # Check if repeated
-            if box_id in opened_boxes:
-                rewards.append(REWARD_REPEATED_BOX)  # -0.5
-                continue
+                # Parse the box selection from this assistant message
+                box_id, status = self._parse_box_answer(
+                    msg["content"], n_boxes, mode, box_coords
+                )
 
-            # Check if illegal (no more legal tokens can be in this box)
-            is_illegal = True
-            for token, legal in legal_boxes.items():
-                if box_id in legal:
-                    is_illegal = False
-                    break
+                if status != "valid" or box_id is None:
+                    # Format/validity error handled by other rewards
+                    continue
 
-            if is_illegal:
-                rewards.append(REWARD_ILLEGAL_BOX)  # -0.5
-            else:
-                rewards.append(REWARD_VALID_GUESS)  # 0.0
+                # Look at the NEXT message (USER response) to determine outcome
+                if i + 1 < len(trajectory) and trajectory[i + 1]["role"] == "user":
+                    user_response = trajectory[i + 1]["content"]
+                    user_response_lower = user_response.lower()
+
+                    # Check for repeated box (within current search)
+                    if "already opened box" in user_response_lower:
+                        total_reward += REWARD_REPEATED_BOX  # -0.5
+                        # Don't add to opened_boxes since it was already there
+                        continue
+
+                    # Check if this box is exhausted (all token types already found here)
+                    if box_id in box_token_history and len(box_token_history[box_id]) >= n_tokens:
+                        # Box is exhausted - cannot contain any more tokens
+                        total_reward += REWARD_ILLEGAL_BOX  # -0.5
+                        # Still add to opened_boxes for repeat tracking
+                        opened_boxes_current_search.add(box_id)
+                        continue
+
+                    # Check if token was found
+                    # Pattern: "Token X found in box Y!" or "Token X found in box (x, y)!"
+                    token_found_match = re.search(
+                        r"token\s+(\w+)\s+found", user_response_lower
+                    )
+                    if token_found_match:
+                        token_name = token_found_match.group(1).upper()
+
+                        # Record this token was found in this box
+                        if box_id not in box_token_history:
+                            box_token_history[box_id] = set()
+                        box_token_history[box_id].add(token_name)
+
+                        # New search begins - reset opened boxes
+                        opened_boxes_current_search = set()
+                    else:
+                        # "No tokens found" or "Box is empty" - valid exploration
+                        opened_boxes_current_search.add(box_id)
+
+            rewards.append(total_reward)
 
         return rewards
 
@@ -324,52 +374,39 @@ class SWMRubric(Rubric):
         self, completions: List[List[dict]], answer: List[str], **kwargs
     ) -> List[float]:
         """
-        Reward for finding a token at the chosen box.
+        Reward for finding tokens - summed across ALL turns.
 
-        Returns +1.0 if token was found.
-        Returns 0.0 if box was empty.
+        Per-turn rewards:
+        - +1.0 for each turn where a token was found
+        - 0.0 for turns where box was empty or repeated
 
-        Requires state information passed via kwargs.
+        State is reconstructed by parsing USER feedback messages in the trajectory:
+        - "Token X found in box Y!" indicates a token was found
+        - "Box X is empty" or "already opened" indicates no token found
+
+        Returns sum of per-turn rewards for each trajectory.
         """
         rewards = []
-        token_box = kwargs.get("token_box", {})
-        n_boxes = kwargs.get("n_boxes", self.n_boxes)
-        mode = kwargs.get("mode", self.mode)
-        box_coords = kwargs.get("box_coords", None)
 
         for trajectory in completions:
-            # Get last assistant message
-            last_assistant = None
-            for msg in reversed(trajectory):
-                if msg["role"] == "assistant":
-                    last_assistant = msg["content"]
-                    break
+            total_reward = 0.0
 
-            if not last_assistant:
-                rewards.append(REWARD_VALID_GUESS)  # 0.0
-                continue
+            # Process trajectory turn by turn
+            # Each turn is: assistant message -> user response
+            for i, msg in enumerate(trajectory):
+                if msg["role"] != "assistant":
+                    continue
 
-            # Parse box
-            box_id, status = self._parse_box_answer(
-                last_assistant, n_boxes, mode, box_coords
-            )
+                # Look at the NEXT message (USER response) to determine if token found
+                if i + 1 < len(trajectory) and trajectory[i + 1]["role"] == "user":
+                    user_response = trajectory[i + 1]["content"].lower()
 
-            if status != "valid" or box_id is None:
-                # Format or validity error handled by other rewards
-                rewards.append(REWARD_VALID_GUESS)  # 0.0
-                continue
+                    # Check for token found pattern: "Token X found in box Y!"
+                    if "token" in user_response and "found" in user_response:
+                        total_reward += REWARD_TOKEN_FOUND  # +1.0
+                    # else: no token found, 0.0
 
-            # Check if token found
-            found_token = False
-            for token, box in token_box.items():
-                if box == box_id:
-                    found_token = True
-                    break
-
-            if found_token:
-                rewards.append(REWARD_TOKEN_FOUND)  # +1.0
-            else:
-                rewards.append(REWARD_VALID_GUESS)  # 0.0
+            rewards.append(total_reward)
 
         return rewards
 
