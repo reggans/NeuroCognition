@@ -10,11 +10,27 @@ from pathlib import Path
 
 METRIC_KEYS = [
     "accuracy",
-    "perserverative_error",
+    "perseverative_response",
     "cat_complete",
     "first_cat_trials",
     "failure_set",
     "S_wcst",
+]
+
+NUM_TO_WORD = {1: "one", 2: "two", 3: "three", 4: "four"}
+
+STATIC_OPTIONS_EASY = [
+    {"number": "one", "color": "red", "shape": "circle"},
+    {"number": "two", "color": "green", "shape": "triangle"},
+    {"number": "three", "color": "blue", "shape": "star"},
+    {"number": "four", "color": "yellow", "shape": "square"},
+]
+
+STATIC_OPTIONS_HARD = [
+    {"number": "one", "color": "red", "shape": "circle", "background": "red"},
+    {"number": "two", "color": "green", "shape": "triangle", "background": "green"},
+    {"number": "three", "color": "blue", "shape": "star", "background": "blue"},
+    {"number": "four", "color": "yellow", "shape": "square", "background": "yellow"},
 ]
 
 
@@ -24,41 +40,89 @@ def load_run_stats(stats_file):
         return json.load(f)
 
 
-def complete_score(data, rule_requirement=None):
+def parse_card_str(card_str):
+    parts = card_str.strip().split(" ")
+    attrs = {}
+    if len(parts) >= 3:
+        attrs["number"] = parts[0]
+        attrs["color"] = parts[1]
+        attrs["shape"] = parts[2]
+    if len(parts) >= 4:
+        attrs["background"] = parts[3]
+    return attrs
+
+
+def get_matching_rules(card1_attrs, card2_attrs):
+    matches = set()
+    for rule in ["number", "color", "shape", "background"]:
+        if rule in card1_attrs and rule in card2_attrs:
+            if card1_attrs[rule] == card2_attrs[rule]:
+                matches.add(rule)
+    return matches
+
+
+def parse_question_for_cards(question_text):
+    g_match = re.search(r"Given:\s+(.+?)\n", question_text)
+    if not g_match:
+        return None, []
+    given_text = g_match.group(1).strip()
+    given_attrs = parse_card_str(given_text)
+
+    opts = []
+    opt_matches = re.findall(r"\d+\.\s+(.+?)(?:\n|$)", question_text)
+    for txt in opt_matches:
+        opts.append(parse_card_str(txt.strip()))
+
+    return given_attrs, opts
+
+
+def complete_score(data, rule_requirement=None, has_background=False):
     scores = {key: [] for key in METRIC_KEYS}
 
     for trial in data:
         requirement = rule_requirement if rule_requirement is not None else 5
         correct_rule = ""
-        perserverated_response = -1
-        first_complete = False
-        correct_run = 0
-        conceptual_response = False
 
+        # State tracking
         current_rule = None
         current_rule_guesses = 0
         current_rule_correct = 0
+
+        # Persistence / Acquisition tracking
+        eliminated_rules = set()
+        conceptual_response = False
+        correct_run = 0
+
+        # Metric Allocations
         S_ri_values = []
         unique_rules = set()
 
         total_complete = 0
-        total_perseverated = 0
-        total_fms = 0
         total_correct = 0
+
+        # PR counters
+        pr_numerator = 0
+        pr_denominator_count = 0
+
+        # FMS counters
+        fms_numerator = 0
+        fms_denominator_count = 0
+
         first_cat_trial_idx = None
+        first_complete = False
 
         for i, query in enumerate(trial):
+            # 1. Rule Switch Detection
+            rule_name = query["rule"]
             if correct_rule != query["rule"] and correct_rule != "":
-                perserverated_response = -1
+                # Reset state on rule change
                 correct_run = 0
                 conceptual_response = False
+                eliminated_rules = set()
 
                 if not first_complete:
                     first_complete = True
                     first_cat_trial_idx = i + 1
-
-            rule_name = query["rule"]
-            unique_rules.add(rule_name)
 
             if rule_name != current_rule:
                 if (
@@ -70,12 +134,72 @@ def complete_score(data, rule_requirement=None):
                 current_rule = rule_name
                 current_rule_guesses = 0
                 current_rule_correct = 0
+                # Ensure eliminated rules are cleared if rule_name changes (redundant but safe)
+                eliminated_rules = set()
 
+            unique_rules.add(rule_name)
             current_rule_guesses += 1
+            correct_rule = query["rule"]  # Update ground truth rule
 
-            # Always update correct_rule to current query's rule
-            correct_rule = query["rule"]
+            # 2. Parse Context
+            given_attrs = None
+            opt_attrs_list = []
 
+            # Check if we have explicit given_card object (image mode)
+            if "given_card" in query and isinstance(query["given_card"], dict):
+                raw_given = query["given_card"]
+                given_attrs = {}
+                # Map fields
+                if "count" in raw_given:
+                    given_attrs["number"] = NUM_TO_WORD.get(
+                        raw_given["count"], "unknown"
+                    )
+                if "color" in raw_given:
+                    given_attrs["color"] = raw_given["color"]
+                if "shape" in raw_given:
+                    given_attrs["shape"] = raw_given["shape"]
+                if "background" in raw_given:
+                    given_attrs["background"] = raw_given["background"]
+
+                # Image mode usually implies static options
+                opt_attrs_list = (
+                    STATIC_OPTIONS_HARD if has_background else STATIC_OPTIONS_EASY
+                )
+
+            # Fallback to question parsing if not found yet (text mode)
+            if not given_attrs and "question" in query:
+                given_attrs, opt_attrs_list = parse_question_for_cards(
+                    query["question"]
+                )
+
+            # Get model choice
+            matches_current = set()
+            try:
+                ans_idx = int(query["model_ans"]) - 1
+                if 0 <= ans_idx < len(opt_attrs_list) and given_attrs:
+                    matches_current = get_matching_rules(
+                        given_attrs, opt_attrs_list[ans_idx]
+                    )
+            except Exception:
+                pass
+
+            # 3. Calculate Metrics (PR)
+            # PR: 1{R_neg != empty} is denominator
+            if eliminated_rules:
+                pr_denominator_count += 1
+                # PR: 1{rt inside R_neg}
+                # If matches_current is non-empty and subset of eliminated, it's PR
+                if matches_current and matches_current.issubset(eliminated_rules):
+                    pr_numerator += 1
+
+            # 4. Calculate Metrics (FMS) - Check before updating state
+            # "post-acquisition turns" means strictly after acquisition moment
+            if conceptual_response:
+                fms_denominator_count += 1
+                if not query["correct"]:
+                    fms_numerator += 1
+
+            # 5. Update State (Correctness, Acquisition, Elimination)
             if query["correct"]:
                 total_correct += 1
                 correct_run += 1
@@ -87,18 +211,9 @@ def complete_score(data, rule_requirement=None):
                     total_complete += 1
             else:
                 correct_run = 0
-
-                if conceptual_response:
-                    total_fms += 1
-
-                try:
-                    ans = int(query["model_ans"])
-
-                    if ans == perserverated_response:
-                        total_perseverated += 1
-                    perserverated_response = ans
-                except Exception:
-                    continue
+                # Incorrect response adds its matching rules to eliminated set
+                if matches_current:
+                    eliminated_rules.update(matches_current)
 
         if (
             current_rule is not None
@@ -109,10 +224,19 @@ def complete_score(data, rule_requirement=None):
 
         n_query = len(trial)
         scores["accuracy"].append(total_correct / n_query)
-        scores["perserverative_error"].append(total_perseverated / n_query)
+
+        # Finalize PR (Rate)
+        scores["perseverative_response"].append(
+            pr_numerator / pr_denominator_count if pr_denominator_count > 0 else 0.0
+        )
+
         scores["cat_complete"].append(total_complete)
-        scores["failure_set"].append(total_fms / n_query)
-        # Always append a value for first_cat_trials (use n_query+1 if never completed)
+
+        # Finalize FMS (Rate: errors / post_acq_turns)
+        scores["failure_set"].append(
+            fms_numerator / fms_denominator_count if fms_denominator_count > 0 else 0.0
+        )
+
         if first_cat_trial_idx is not None:
             scores["first_cat_trials"].append(first_cat_trial_idx)
         else:
@@ -299,7 +423,10 @@ def analyze_results(data_type: str = "image"):
                 else:
                     category = "cot"
             else:
-                category = "non_cot"
+                if background_mode:
+                    category = f"non_cot_{background_mode}"
+                else:
+                    category = "non_cot"
 
             if has_notes:
                 category = f"{category}_notes"
@@ -320,7 +447,9 @@ def analyze_results(data_type: str = "image"):
                 for run_id, run_data in stats.items():
                     try:
                         run_metrics = complete_score(
-                            [run_data], rule_requirement=num_correct_required
+                            [run_data],
+                            rule_requirement=num_correct_required,
+                            has_background=(background_mode is not None),
                         )
                         for k in METRIC_KEYS:
                             metric_lists[k].append(run_metrics[k])
@@ -360,7 +489,9 @@ def analyze_results(data_type: str = "image"):
         all_models = sorted(list(all_models))
 
         # Determine categories to plot: keep base order, then any dynamic extensions sorted
-        dynamic_categories = [c for c in results[setup_type].keys() if c not in base_categories]
+        dynamic_categories = [
+            c for c in results[setup_type].keys() if c not in base_categories
+        ]
         # Stable sort for reproducibility
         dynamic_categories = sorted(dynamic_categories)
         categories_to_plot = base_categories + dynamic_categories
@@ -420,7 +551,7 @@ def analyze_results(data_type: str = "image"):
         ax1.set_xticks(x)
         ax1.set_xticklabels(all_models, rotation=45, ha="right")
         ax1.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
-        # Plot perserverative_error (bottom subplot)
+        # Plot perseverative_response (bottom subplot)
         for i, category in enumerate(categories_to_plot):
             errors = []
             min_errors = []
@@ -428,9 +559,9 @@ def analyze_results(data_type: str = "image"):
             for model in all_models:
                 if model in results[setup_type][category]:
                     model_data = results[setup_type][category][model]
-                    errors.append(model_data.get("avg_perserverative_error", 0))
-                    min_errors.append(model_data.get("min_perserverative_error", 0))
-                    max_errors.append(model_data.get("max_perserverative_error", 0))
+                    errors.append(model_data.get("avg_perseverative_response", 0))
+                    min_errors.append(model_data.get("min_perseverative_response", 0))
+                    max_errors.append(model_data.get("max_perseverative_response", 0))
                 else:
                     errors.append(0)
                     min_errors.append(0)
@@ -464,9 +595,9 @@ def analyze_results(data_type: str = "image"):
                     )
 
         ax2.set_xlabel("Models")
-        ax2.set_ylabel("Perserverative Error")
+        ax2.set_ylabel("Perseverative Response")
         ax2.set_title(
-            f"WCST {setup_type.title()} - Average Perserverative Error by Model and Category"
+            f"WCST {setup_type.title()} - Average Perseverative Response by Model and Category"
         )
         ax2.set_xticks(x)
         ax2.set_xticklabels(all_models, rotation=45, ha="right")
