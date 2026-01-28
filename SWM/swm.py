@@ -17,6 +17,7 @@ except ImportError:
     from shared.model_wrapper import ModelWrapper
 from .image import SWMImage
 
+
 def image_swm(
     model,
     n_boxes,
@@ -43,7 +44,6 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
 
     # Configure the question presented each turn and CoT prompt
 
-    
     if cot is not None:
         cot_prompt = f"Think step-by-step, utilizing information from previous feedbacks, and state your reasoning in maximum {think_budget} tokens, wrapped with <think> and </think>. Then, provide a really short summary of your reasoning after the closing </think> tag.\n"
         question = f"Answer concisely. {cot_prompt}Which of the {n_boxes} boxes would you like to open?\nYour final answer should be a grid coordinate (x, y), wrapped with <answer> and </answer>"
@@ -151,7 +151,11 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                             run_history.append(
                                 {
                                     "token_box": [
-                                        swm_gen.get_box_coord(token_box[t])
+                                        (
+                                            None
+                                            if token_box[t] is None
+                                            else swm_gen.get_box_coord(token_box[t])
+                                        )
                                         for t in tokens
                                     ],
                                     "chosen_coord": None,
@@ -173,7 +177,7 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
 
                             if response is None:
                                 return run_stats, run_history
-                            
+
                             continue
                         try:
                             chosen_box = swm_gen.get_box_id(chosen_coord)
@@ -181,7 +185,11 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                             run_history.append(
                                 {
                                     "token_box": [
-                                        swm_gen.get_box_coord(token_box[t])
+                                        (
+                                            None
+                                            if token_box[t] is None
+                                            else swm_gen.get_box_coord(token_box[t])
+                                        )
                                         for t in tokens
                                     ],
                                     "chosen_coord": chosen_coord,
@@ -203,13 +211,18 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
 
                             if response is None:
                                 return run_stats, run_history
-                            
+
                             continue
                     else:
                         run_history.append(
                             {
                                 "token_box": [
-                                    swm_gen.get_box_coord(token_box[t]) for t in tokens
+                                    (
+                                        None
+                                        if token_box[t] is None
+                                        else swm_gen.get_box_coord(token_box[t])
+                                    )
+                                    for t in tokens
                                 ],
                                 "chosen_coord": None,
                                 "found": False,
@@ -250,7 +263,10 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                     opened_boxes.add(chosen_box)
 
                     for token in tokens:
-                        if token_box[token] is not None and chosen_box == token_box[token]:
+                        if (
+                            token_box[token] is not None
+                            and chosen_box == token_box[token]
+                        ):
                             found = True
                             token_bar.update(1)
                             legal_boxes[token].remove(chosen_box)
@@ -265,7 +281,9 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                     run_history.append(
                         {
                             "token_box": [
-                                swm_gen.get_box_coord(token_box[t]) for t in tokens if token_box[t] is not None
+                                swm_gen.get_box_coord(token_box[t])
+                                for t in tokens
+                                if token_box[t] is not None
                             ],
                             "chosen_coord": chosen_coord,
                             "found": found,
@@ -281,13 +299,13 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                         image_only=image_only,
                     )
 
+                    if response is None:
+                        return run_stats, run_history
+
                     if not image_only:
                         model.history[-2]["content"][0][
                             "text"
                         ] = msg  # Truncate user response length
-                    
-                    if response is None:
-                        return run_stats, run_history
 
     run_stats["finished_run"] = True
     return run_stats, run_history
@@ -435,7 +453,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
 
                             if response is None:
                                 return run_stats, run_history
-                            
+
                             continue
                     else:
                         run_history.append(
@@ -460,7 +478,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
 
                         if response is None:
                             return run_stats, run_history
-                        
+
                         continue
 
                     legal = False
@@ -478,7 +496,10 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                     opened_boxes.add(chosen_box)
 
                     for token in tokens:
-                        if token_box[token] is not None and chosen_box == token_box[token]:
+                        if (
+                            token_box[token] is not None
+                            and chosen_box == token_box[token]
+                        ):
                             found = True
                             token_bar.update(1)
                             legal_boxes[token].remove(chosen_box)
@@ -493,7 +514,9 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
 
                     run_history.append(
                         {
-                            "token_box": [token_box[t] for t in tokens if token_box[t] is not None],
+                            "token_box": [
+                                token_box[t] for t in tokens if token_box[t] is not None
+                            ],
                             "chosen_box": chosen_box,
                             "found": found,
                             "status": "valid",
@@ -505,7 +528,7 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         msg + notes + question, truncate_history=True, cot=cot
                     )
                     model.history[-2]["content"] = msg  # Truncate user response length
-                    
+
                     if response is None:
                         return run_stats, run_history
 
