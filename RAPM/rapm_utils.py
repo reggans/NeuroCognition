@@ -156,13 +156,16 @@ def reconstruct_cell_constraint(d: dict) -> CellConstraint:
 
 # ---------------- Batch request builders ---------------- #
 
-def build_image_batch_requests(args, questions, system_prompt) -> List[dict]:
+def build_image_batch_requests(args, questions, system_prompt, instruction_text: Optional[str] = None) -> List[dict]:
     base_dir = os.path.dirname(args.eval_data)
     reqs = []
     for idx, q in enumerate(questions):
         img_path = os.path.join(base_dir, q["full_image"])
         b64 = encode_image_to_base64(img_path)
-        user_content = [{"type": "image_url", "image_url": {"url": b64}}]
+        user_content: List[Dict[str, Any]] = []
+        if instruction_text:
+            user_content.append({"type": "text", "text": instruction_text})
+        user_content.append({"type": "image_url", "image_url": {"url": b64}})
         msgs = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
@@ -177,10 +180,12 @@ def build_image_batch_requests(args, questions, system_prompt) -> List[dict]:
     return reqs
 
 
-def build_text_batch_requests(args, items, system_prompt) -> List[dict]:
+def build_text_batch_requests(args, items, system_prompt, instruction_text: Optional[str] = None) -> List[dict]:
     reqs = []
     for idx, item in enumerate(items):
         prompt = format_text_item_prompt(item, args.answer_mode)
+        if instruction_text:
+            prompt = f"{prompt.rstrip()}\n\n{instruction_text}"
         msgs = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
