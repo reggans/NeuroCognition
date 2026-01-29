@@ -1,0 +1,547 @@
+"""
+RAPM Rubric for multi-turn RL training.
+Defines turn-level and outcome-level reward functions compatible with TRL.
+
+Supports:
+- Image-MC: max 8 turns, -0.1 per wrong, -1.0 final penalty if max turns reached
+- Text-MC: max turns = # constraints, -0.1 × violations per wrong turn, -1.0 final penalty
+- Text-Gen: same as text-MC but generates strings instead of selecting from options
+"""
+
+import os
+import sys
+import re
+from typing import List
+
+# Add parent directory to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    from shared.rubrics import Rubric
+    from shared.parsers import XMLParser
+except ImportError:
+    class Rubric:
+        def __init__(self):
+            self.turn_reward_funcs = []
+            self.outcome_reward_funcs = []
+    
+    class XMLParser:
+        def __init__(self, fields=None):
+            self.fields = fields or []
+
+# Import existing validators from the RAPM module
+try:
+    from RAPM.text_rapm.per_cell_constraints import CellConstraint
+    from RAPM.text_rapm.validator import cell_satisfies, constraint_violations
+except ImportError:
+    CellConstraint = None
+    cell_satisfies = None
+    constraint_violations = None
+
+# Reward constants (matching MT-GRPO paper reward design)
+# Turn-level: +0.1 for correct format (encourage exploration with valid format)
+REWARD_CORRECT = 1.0
+REWARD_VALID_FORMAT = 0.1  # Small positive for correct format (MT-GRPO Section 5.2)
+REWARD_WRONG_MULTITURN = -0.1
+REWARD_CONSTRAINT_VIOLATION = -0.1
+REWARD_MAX_TURNS_FAILED = -1.0
+REWARD_INVALID_FORMAT = -1.0
+REWARD_REPEATED = -0.5  # Penalty for repeating same wrong answer
+
+
+class RAPMRubric(Rubric):
+    """
+    Rubric for Raven's Progressive Matrices (RAPM).
+
+    Turn-level rewards (3 functions) - SUMMED across all turns:
+    1. turn_wrong_answer_penalty: -0.1 per wrong (image) or -0.1 × violations (text)
+    2. turn_invalid_format_penalty: +0.1 if all valid, -1.0 if any invalid
+    3. turn_repeat_penalty: -0.5 for repeating a previously wrong answer
+
+    State reconstruction: turn_repeat_penalty parses USER feedback messages:
+    - "Incorrect" indicates wrong answer - track it in wrong_answers_seen set
+    - Subsequent same answer -> -0.5 penalty
+
+    Outcome-level rewards:
+    - outcome_correctness_reward: +1.0 if correct
+    - outcome_max_turns_failure: -1.0 if max turns reached without success
+    """
+
+    def __init__(self, mode: str = "image", answer_mode: str = "mc"):
+        """Initialize with mode configuration."""
+        super().__init__()
+        self.parser = XMLParser(fields=["reasoning", "answer"])
+        self.mode = mode
+        self.answer_mode = answer_mode
+
+    def _parse_numeric_answer(self, text: str) -> int or None:
+        """Parse numeric answer (1-8) from <answer> tags."""
+        if not text:
+            return None
+
+        match = re.search(r"<answer>(.*?)</answer>", text, re.DOTALL)
+        if not match:
+            return None
+
+        nums = re.findall(r"\d+", match.group(1).strip())
+        if not nums:
+            return None
+
+        try:
+            n = int(nums[0])
+            return n if 1 <= n <= 8 else None
+        except ValueError:
+            return None
+
+    def _parse_string_answer(self, text: str) -> str or None:
+        """Parse string answer from <answer> tags (for text-gen)."""
+        if not text:
+            return None
+
+        match = re.search(r"<answer>(.*?)</answer>", text, re.DOTALL)
+        if not match:
+            return None
+
+        return match.group(1).strip().strip('"')
+
+    def _count_constraint_violations(
+        self, answer_str: str, cell_constraint_data: dict or None
+    ) -> int:
+        """Count constraint violations using existing validator."""
+        if (
+            cell_constraint_data is None
+            or constraint_violations is None
+            or CellConstraint is None
+        ):
+            return 1
+
+        try:
+            cc = CellConstraint(
+                fixed_length=cell_constraint_data.get("fixed_length"),
+                target_counts=cell_constraint_data.get("target_counts", {}),
+                parity_rules=cell_constraint_data.get("parity_rules", {}),
+                multiple_rules=cell_constraint_data.get("multiple_rules", {}),
+                unique_exact=cell_constraint_data.get("unique_exact"),
+                ordering=cell_constraint_data.get("ordering"),
+                positional_type=cell_constraint_data.get("positional_type"),
+                positional_index_rule=cell_constraint_data.get("positional_index_rule"),
+            )
+            violations = constraint_violations(answer_str, cc)
+            return len(violations)
+        except Exception:
+            return 1
+
+    def _check_text_gen_correct(
+        self, answer_str: str, cell_constraint_data: dict or None
+    ) -> bool:
+        """Check if text-gen answer satisfies all constraints."""
+        if (
+            cell_constraint_data is None
+            or cell_satisfies is None
+            or CellConstraint is None
+        ):
+            return False
+
+        try:
+            cc = CellConstraint(
+                fixed_length=cell_constraint_data.get("fixed_length"),
+                target_counts=cell_constraint_data.get("target_counts", {}),
+                parity_rules=cell_constraint_data.get("parity_rules", {}),
+                multiple_rules=cell_constraint_data.get("multiple_rules", {}),
+                unique_exact=cell_constraint_data.get("unique_exact"),
+                ordering=cell_constraint_data.get("ordering"),
+                positional_type=cell_constraint_data.get("positional_type"),
+                positional_index_rule=cell_constraint_data.get("positional_index_rule"),
+            )
+            return cell_satisfies(answer_str, cc)
+        except Exception:
+            return False
+
+    # ========== TURN-LEVEL REWARDS ==========
+
+    def turn_correctness_reward(
+        self, completions: List[List[dict]], answer: List[str], **kwargs
+    ) -> List[float]:
+        """
+        Turn-level reward for correct answers: +1.0 if correct.
+
+        When the answer is correct, episode ends immediately.
+
+        Args:
+            completions: List[List[Dict]]  # Trajectories
+            answer: List[str]  # Expected answers
+            **kwargs: mode, answer_mode
+
+        Returns:
+            List[float]  # +1.0 for correct, 0.0 otherwise
+        """
+        rewards = []
+        mode = kwargs.get("mode", self.mode)
+        answer_mode = kwargs.get("answer_mode", self.answer_mode)
+
+        for trajectory, expected in zip(completions, answer):
+            # Get last assistant message
+            last_assistant = None
+            for msg in reversed(trajectory):
+                if msg["role"] == "assistant":
+                    last_assistant = msg["content"]
+                    break
+
+            if not last_assistant:
+                rewards.append(0.0)
+                continue
+
+            # Parse answer based on mode
+            if mode == "image" or answer_mode == "mc":
+                pred = self._parse_numeric_answer(last_assistant)
+                if pred is None:
+                    rewards.append(0.0)
+                    continue
+
+                try:
+                    gold = int(expected)
+                    is_correct = pred == gold
+                except (ValueError, TypeError):
+                    is_correct = False
+
+                rewards.append(REWARD_CORRECT if is_correct else 0.0)
+            else:
+                # Text-gen mode
+                pred = self._parse_string_answer(last_assistant)
+                if pred is None:
+                    rewards.append(0.0)
+                    continue
+
+                cell_constraint = kwargs.get("cell_constraint")
+                is_correct = self._check_text_gen_correct(pred, cell_constraint)
+                rewards.append(REWARD_CORRECT if is_correct else 0.0)
+
+        return rewards
+
+    def turn_wrong_answer_penalty(
+        self, completions: List[List[dict]], answer: List[str], **kwargs
+    ) -> List[float]:
+        """
+        Turn-level penalty for wrong answers.
+
+        - Image-MC: -0.1 per wrong answer
+        - Text mode: -0.1 × constraint_violations per wrong answer
+
+        Args:
+            completions: List[List[Dict]]  # Trajectories
+            answer: List[str]  # Expected answers
+            **kwargs: mode, answer_mode, cell_constraint
+
+        Returns:
+            List[float]  # Penalty per example
+        """
+        rewards = []
+        mode = kwargs.get("mode", self.mode)
+        answer_mode = kwargs.get("answer_mode", self.answer_mode)
+
+        for trajectory, expected in zip(completions, answer):
+            # Get last assistant message
+            last_assistant = None
+            for msg in reversed(trajectory):
+                if msg["role"] == "assistant":
+                    last_assistant = msg["content"]
+                    break
+
+            if not last_assistant:
+                rewards.append(0.0)
+                continue
+
+            # Parse answer based on mode
+            if mode == "image" or answer_mode == "mc":
+                pred = self._parse_numeric_answer(last_assistant)
+                if pred is None:
+                    # Invalid format handled separately
+                    rewards.append(0.0)
+                    continue
+
+                try:
+                    gold = int(expected)
+                    is_correct = pred == gold
+                except (ValueError, TypeError):
+                    is_correct = False
+
+                if is_correct:
+                    rewards.append(0.0)  # No penalty for correct
+                else:
+                    rewards.append(REWARD_WRONG_MULTITURN)  # -0.1
+            else:
+                # Text-gen mode
+                pred = self._parse_string_answer(last_assistant)
+                if pred is None:
+                    rewards.append(0.0)
+                    continue
+
+                cell_constraint = kwargs.get("cell_constraint")
+                is_correct = self._check_text_gen_correct(pred, cell_constraint)
+
+                if is_correct:
+                    rewards.append(0.0)
+                else:
+                    violations = self._count_constraint_violations(
+                        pred, cell_constraint
+                    )
+                    rewards.append(
+                        REWARD_CONSTRAINT_VIOLATION * violations
+                    )  # -0.1 × violations
+
+        return rewards
+
+    def turn_invalid_format_penalty(
+        self, completions: List[List[dict]], answer: List[str], **kwargs
+    ) -> List[float]:
+        """
+        Reward/penalty for answer format validity in ANY turn.
+
+        Evaluates ALL assistant turns:
+        - Returns +0.1 if ALL turns have valid <answer> tags
+        - Returns -1.0 if ANY turn has invalid format
+
+        Args:
+            completions: List[List[Dict]]  # Trajectories
+            answer: List[str]  # Not used
+
+        Returns:
+            List[float]  # Reward/penalty per example
+        """
+        rewards = []
+        mode = kwargs.get("mode", self.mode)
+        answer_mode = kwargs.get("answer_mode", self.answer_mode)
+
+        for trajectory in completions:
+            all_valid = True
+            has_assistant = False
+
+            for msg in trajectory:
+                if msg["role"] == "assistant":
+                    has_assistant = True
+                    # Check if answer is parseable
+                    if mode == "image" or answer_mode == "mc":
+                        pred = self._parse_numeric_answer(msg["content"])
+                    else:
+                        pred = self._parse_string_answer(msg["content"])
+
+                    if pred is None:
+                        all_valid = False
+                        break
+
+            if not has_assistant:
+                rewards.append(REWARD_INVALID_FORMAT)
+            elif not all_valid:
+                rewards.append(REWARD_INVALID_FORMAT)
+            else:
+                rewards.append(REWARD_VALID_FORMAT)  # +0.1 for all valid
+
+        return rewards
+
+    def turn_repeat_penalty(
+        self, completions: List[List[dict]], answer: List[str], **kwargs
+    ) -> List[float]:
+        """
+        Penalty for repeating the same wrong answer - summed across ALL turns.
+
+        Per-turn rewards:
+        - -0.5 for repeating a previously wrong answer
+        - 0.0 for trying a new answer (even if wrong)
+
+        State is reconstructed by parsing USER feedback messages in the trajectory:
+        - "Incorrect" indicates wrong answer - track it
+        - Subsequent same answer while still wrong -> penalty
+
+        Note: For text-gen mode, we compare string answers directly.
+        For MC mode (image or text-mc), we compare numeric choices.
+
+        Returns sum of per-turn penalties for each trajectory.
+        """
+        rewards = []
+        mode = kwargs.get("mode", self.mode)
+        answer_mode = kwargs.get("answer_mode", self.answer_mode)
+
+        for trajectory in completions:
+            total_penalty = 0.0
+
+            # Track wrong answers seen so far (to detect repeats)
+            wrong_answers_seen: set = set()
+
+            # Process trajectory turn by turn
+            for i, msg in enumerate(trajectory):
+                if msg["role"] != "assistant":
+                    continue
+
+                # Parse the answer from this assistant message
+                if mode == "image" or answer_mode == "mc":
+                    pred = self._parse_numeric_answer(msg["content"])
+                else:
+                    pred = self._parse_string_answer(msg["content"])
+
+                if pred is None:
+                    # Invalid format handled by other reward function
+                    continue
+
+                # Look at the NEXT message (USER response) to determine outcome
+                if i + 1 < len(trajectory) and trajectory[i + 1]["role"] == "user":
+                    user_response = trajectory[i + 1]["content"].lower()
+
+                    if "incorrect" in user_response:
+                        # Wrong answer - check if it's a repeat
+                        if pred in wrong_answers_seen:
+                            total_penalty += REWARD_REPEATED  # -0.5
+                        # Add to seen (even if already there)
+                        wrong_answers_seen.add(pred)
+                    # Note: "Correct" ends episode, so no need to reset
+
+            rewards.append(total_penalty)
+
+        return rewards
+
+    # ========== OUTCOME REWARDS ==========
+
+    def outcome_correctness_reward(
+        self, completions: List[List[dict]], answer: List[str], **kwargs
+    ) -> List[float]:
+        """
+        Outcome reward: +1.0 if final answer is correct, 0 otherwise.
+
+        Called at episode end.
+
+        Args:
+            completions: List[List[Dict]]  # Complete trajectories
+            answer: List[str]  # Expected answers
+
+        Returns:
+            List[float]  # Correctness reward per example
+        """
+        rewards = []
+        mode = kwargs.get("mode", self.mode)
+        answer_mode = kwargs.get("answer_mode", self.answer_mode)
+
+        for trajectory, expected in zip(completions, answer):
+            # Get last assistant message
+            last_assistant = None
+            for msg in reversed(trajectory):
+                if msg["role"] == "assistant":
+                    last_assistant = msg["content"]
+                    break
+
+            if not last_assistant:
+                rewards.append(0.0)
+                continue
+
+            # Determine correctness based on mode
+            if mode == "image" or answer_mode == "mc":
+                pred = self._parse_numeric_answer(last_assistant)
+                if pred is None:
+                    rewards.append(0.0)
+                else:
+                    try:
+                        gold = int(expected)
+                        if pred == gold:
+                            rewards.append(REWARD_CORRECT)  # +1.0
+                        else:
+                            rewards.append(0.0)
+                    except (ValueError, TypeError):
+                        rewards.append(0.0)
+            else:
+                # Text-gen: string answer
+                pred = self._parse_string_answer(last_assistant)
+                if pred is None:
+                    rewards.append(0.0)
+                else:
+                    cell_constraint = kwargs.get("cell_constraint")
+                    is_correct = self._check_text_gen_correct(pred, cell_constraint)
+                    if is_correct:
+                        rewards.append(REWARD_CORRECT)  # +1.0
+                    else:
+                        rewards.append(0.0)
+
+        return rewards
+
+    def outcome_max_turns_failure(
+        self, completions: List[List[dict]], answer: List[str], **kwargs
+    ) -> List[float]:
+        """
+        Outcome penalty: -1.0 if max turns reached without correct answer.
+
+        This is an additional penalty applied at episode end when the model
+        failed to find the correct answer within the turn limit.
+
+        Args:
+            completions: List[List[Dict]]  # Complete trajectories
+            answer: List[str]  # Expected answers
+            **kwargs: max_turns, attempts
+
+        Returns:
+            List[float]  # Penalty per example
+        """
+        rewards = []
+        mode = kwargs.get("mode", self.mode)
+        answer_mode = kwargs.get("answer_mode", self.answer_mode)
+        max_turns = kwargs.get("max_turns", 8)
+        attempts = kwargs.get("attempts", 0)
+
+        for trajectory, expected in zip(completions, answer):
+            # Count turns (assistant messages)
+            turns_taken = sum(1 for msg in trajectory if msg["role"] == "assistant")
+
+            # Get last assistant message
+            last_assistant = None
+            for msg in reversed(trajectory):
+                if msg["role"] == "assistant":
+                    last_assistant = msg["content"]
+                    break
+
+            if not last_assistant:
+                rewards.append(0.0)
+                continue
+
+            # Check if correct
+            is_correct = False
+            if mode == "image" or answer_mode == "mc":
+                pred = self._parse_numeric_answer(last_assistant)
+                if pred is not None:
+                    try:
+                        gold = int(expected)
+                        is_correct = pred == gold
+                    except (ValueError, TypeError):
+                        pass
+            else:
+                pred = self._parse_string_answer(last_assistant)
+                if pred is not None:
+                    cell_constraint = kwargs.get("cell_constraint")
+                    is_correct = self._check_text_gen_correct(pred, cell_constraint)
+
+            # Apply penalty if max turns reached without success
+            if turns_taken >= max_turns and not is_correct:
+                rewards.append(REWARD_MAX_TURNS_FAILED)  # -1.0
+            else:
+                rewards.append(0.0)
+
+        return rewards
+
+    @property
+    def turn_reward_funcs(self) -> List:
+        """
+        Turn-level reward functions.
+        Called after each step to provide immediate feedback.
+        """
+        return [
+            self.turn_wrong_answer_penalty,  # -0.1 for wrong answer
+            self.turn_invalid_format_penalty,  # -1.0 for invalid format
+            self.turn_repeat_penalty,  # -0.5 for repeating same wrong answer
+        ]
+
+    @property
+    def outcome_reward_funcs(self) -> List:
+        """
+        Outcome-level reward functions.
+        Called at episode end to evaluate overall performance.
+        +1.0 for correct answer (episode ends immediately on correct).
+        """
+        return [
+            self.outcome_correctness_reward,  # +1.0 for correct answer
+            self.outcome_max_turns_failure,  # -1.0 if max turns without success
+        ]

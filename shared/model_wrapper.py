@@ -1,6 +1,7 @@
 import openai
 
 import os, time, re
+import logging
 import base64
 
 import json
@@ -99,6 +100,14 @@ def encode_image_to_base64(image_path: str) -> str:
         raise ValueError(f"Failed to encode image {image_path}: {str(e)}")
 
 
+# Reduce noisy INFO logs from OpenAI/Gemini HTTP client
+for _logger in ("openai", "openai._client", "urllib3", "httpx"):
+    try:
+        logging.getLogger(_logger).setLevel(logging.WARNING)
+    except Exception:
+        pass
+
+
 class ModelWrapper:
     def __init__(
         self,
@@ -109,12 +118,12 @@ class ModelWrapper:
         think_budget=256,
         image_input=False,
         image_path=None,
-        n_retry: int = 2,
+        n_retry: int = -1,
     ):
         if image_input:
             if image_path is None:
                 raise ValueError("Image path must be provided")
-            if model_source not in ["vllm", "openai", "openrouter"]:
+            if model_source not in ["vllm", "openai", "openrouter", "google"]:
                 raise NotImplementedError
 
         self.chat = None
@@ -130,7 +139,7 @@ class ModelWrapper:
         # Max number of retry attempts for a failed API call (total attempts = n_retry + 1)
         self.n_retry = max(0, n_retry)
 
-        if model_source in ["openai", "openrouter", "vllm"]:
+        if model_source in ["openai", "openrouter", "vllm", "google"]:
             if model_source == "vllm":
                 api_key = "dummy"  # VLLM doesn't need a real API key
                 base_url = f"http://{os.getenv('VLLM_URL')}/v1"
@@ -142,6 +151,15 @@ class ModelWrapper:
                             "Please set the OPENAI_API_KEY environment variable for OpenAI or pass it to the CLI."
                         )
                 base_url = None
+            elif model_source == "google":
+                # Google Gemini provides an OpenAI-compatible endpoint. Prefer GEMINI_API_KEY.
+                if api_key is None:
+                    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
+                    if api_key is None:
+                        raise ValueError(
+                            "Please set the GEMINI_API_KEY environment variable for Google Gemini or pass it to the CLI."
+                        )
+                base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
             else:
                 if api_key is None:
                     api_key = os.getenv("OPENROUTER_API_KEY")
@@ -173,7 +191,7 @@ class ModelWrapper:
             self.client = openai.OpenAI(**client_kwargs)
         else:
             raise ValueError(
-                "Unsupported model source. Supported sources are: openai, openrouter, vllm."
+                "Unsupported model source. Supported sources are: openai, openrouter, vllm, google."
             )
 
     def init_chat(
@@ -244,6 +262,70 @@ class ModelWrapper:
                     extra_body["reasoning"]["enabled"] = True
             else:
                 extra_body = {"reasoning": {"enabled": False}}
+        elif self.model_source == "google":
+            # Gemini / Google AI Studio handling:
+            # - If cot is True: do not set thinking_config (use service defaults)
+            # - If cot is False: set thinking_level according to model name
+            if cot:
+                model_lower = (self.model_name or "").lower()
+                if "3" in model_lower:
+                    if "pro" in model_lower:
+                        level = "high"
+                    elif "flash" in model_lower:
+                        level = "medium"
+                    else:
+                        level = "low"
+                    extra_body = {
+                        "extra_body": {
+                            "google": {
+                                "thinking_config": {
+                                    "thinking_level": level,
+                                    "include_thoughts": True,
+                                }
+                            }
+                        }
+                    }
+                elif "2.5" in model_lower:
+                    extra_body = {
+                        "extra_body": {
+                            "google": {
+                                "thinking_config": {
+                                    "thinking_budget": 8192,
+                                    "include_thoughts": True,
+                                }
+                            }
+                        }
+                    }
+            else:
+                model_lower = (self.model_name or "").lower()
+                if "3" in model_lower:
+                    if "pro" in model_lower:
+                        level = "low"
+                    elif "flash" in model_lower:
+                        level = "minimal"
+                    else:
+                        level = "low"
+                    extra_body = {
+                        "extra_body": {
+                            "google": {
+                                "thinking_config": {
+                                    "thinking_level": level,
+                                    "include_thoughts": True,
+                                }
+                            }
+                        }
+                    }
+                elif "2.5" in model_lower:
+                    extra_body = {
+                        "extra_body": {
+                            "google": {
+                                "thinking_config": {
+                                    "thinking_budget": 1024,
+                                    "include_thoughts": False,
+                                }
+                            }
+                        }
+                    }
 
         # Metadata placeholders
         self.last_finish_reason = None
@@ -416,6 +498,9 @@ class ModelWrapper:
                 )
             else:
                 # Extract reasoning trace from response
+                # Guard against None raw_response
+                if raw_response is None:
+                    return None
                 trace = re.search(r"<think>(.*?)</think>", raw_response, re.DOTALL)
                 if not trace:
                     trace = re.search(
@@ -434,6 +519,9 @@ class ModelWrapper:
         # Parse response
         if truncate_history:
             # Remove reasoning trace and get content after </think> or </thinking>
+            # Guard against None raw_response
+            if raw_response is None:
+                return None
             parsed = re.search(r"</think>(.*?)$", raw_response, re.DOTALL)
             if not parsed:
                 parsed = re.search(r"</thinking>(.*?)$", raw_response, re.DOTALL)

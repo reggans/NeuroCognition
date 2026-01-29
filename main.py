@@ -52,7 +52,9 @@ Examples:
     wcst_parser.add_argument("--max_trials", type=int, default=64)
     wcst_parser.add_argument("--num_correct", type=int, default=5)
     wcst_parser.add_argument("--repeats", type=int, default=1)
-    wcst_parser.add_argument("--ambiguous", type=str, default="off", choices=["off", "first", "rest"])
+    wcst_parser.add_argument(
+        "--ambiguous", type=str, default="off", choices=["off", "first", "rest"]
+    )
     wcst_parser.add_argument("--few_shot", action="store_true")
     wcst_parser.add_argument("--cot", action="store_true")
     wcst_parser.add_argument("--hint", action="store_true")
@@ -64,7 +66,7 @@ Examples:
         "--model_source",
         type=str,
         default="vllm",
-        choices=["vllm", "openai", "openrouter"],
+        choices=["vllm", "openai", "openrouter", "google"],
     )
     wcst_parser.add_argument("--max_tokens", type=int, default=512)
     wcst_parser.add_argument("--think_budget", type=int, default=64)
@@ -77,7 +79,7 @@ Examples:
         "--model_source",
         type=str,
         default="vllm",
-        choices=["vllm", "openai", "openrouter"],
+        choices=["vllm", "openai", "openrouter", "google"],
     )
     swm_parser.add_argument("--n_boxes", type=int, default=6)
     swm_parser.add_argument("--n_tokens", type=int, default=1)
@@ -99,7 +101,7 @@ Examples:
         "--model_source",
         type=str,
         default="vllm",
-        choices=["vllm", "openai", "openrouter"],
+        choices=["vllm", "openai", "openrouter", "google"],
     )
     rapm_parser.add_argument(
         "--mode",
@@ -297,9 +299,7 @@ Examples:
                     with open(summary_path, "r") as f:
                         existing_summary = json.load(f)
                 except Exception as exc:
-                    print(
-                        f"Warning: couldn't load existing summary ({exc}); ignoring."
-                    )
+                    print(f"Warning: couldn't load existing summary ({exc}); ignoring.")
                     existing_summary = None
             if os.path.exists(reasoning_path):
                 try:
