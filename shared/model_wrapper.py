@@ -142,7 +142,7 @@ class ModelWrapper:
         if model_source in ["openai", "openrouter", "vllm", "google"]:
             if model_source == "vllm":
                 api_key = "dummy"  # VLLM doesn't need a real API key
-                base_url = f"http://{os.getenv('VLLM_URL')}:8877/v1"
+                base_url = f"http://{os.getenv('VLLM_URL')}/v1"
             elif model_source == "openai":
                 if api_key is None:
                     api_key = os.getenv("OPENAI_API_KEY")
@@ -228,6 +228,8 @@ class ModelWrapper:
             base64_image = encode_image_to_base64(image_file_path)
             content = []
             if message and not image_only:
+                if "qwen3" in self.model_name and not cot:
+                    message += "\n/no_think"
                 content.append({"type": "text", "text": message})
             content.append(
                 {

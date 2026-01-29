@@ -35,6 +35,21 @@ from RAPM.rapm_utils import (
     parse_text_mc,
 )
 
+GEMINI_25_PRO_INSTRUCTION = "CRITICAL INSTRUCTION: Do not use <think> tags or reasoning steps. Provide the response immediately."
+
+
+def _is_gemini_25_pro(model_name: str) -> bool:
+    return "gemini-2.5-pro" in (model_name or "").lower()
+
+
+def _append_instruction(text: str, instruction: str) -> str:
+    if not instruction:
+        return text
+    text = text or ""
+    if not text.strip():
+        return instruction
+    return f"{text.rstrip()}\n\n{instruction}"
+
 # ---------------- Data loading ---------------- #
 
 
@@ -230,6 +245,9 @@ def run_rapm_evaluation(
         image_path=os.path.dirname(args.eval_data),
     )
     system_prompt = build_image_system_prompt(args)
+    gemini_instruction = GEMINI_25_PRO_INSTRUCTION if _is_gemini_25_pro(args.model) else None
+    if gemini_instruction:
+        system_prompt = _append_instruction(system_prompt, gemini_instruction)
     correct_by_type = defaultdict(int)
     total_by_type = defaultdict(int)
     for res in results_map.values():
@@ -249,7 +267,8 @@ def run_rapm_evaluation(
         src = os.path.join(os.path.dirname(args.eval_data), q["full_image"])
         current_image_path = os.path.join(model.image_path, "current.png")  # type: ignore
         shutil.copy2(src, current_image_path)
-        resp = model.send_message("", cot=args.cot, truncate_history=True)
+        user_message = gemini_instruction or ""
+        resp = model.send_message(user_message, cot=args.cot, truncate_history=True)
         m = re.search(r"<answer>(.*?)</answer>", resp)
         pred = parse_image_answer(m.group(1).strip() if m else None)
         correct = q["correct_answer"]
@@ -342,6 +361,9 @@ def run_text_rapm_evaluation(
         image_input=False,
     )
     system_prompt = build_text_system_prompt(args)
+    gemini_instruction = GEMINI_25_PRO_INSTRUCTION if _is_gemini_25_pro(args.model) else None
+    if gemini_instruction:
+        system_prompt = _append_instruction(system_prompt, gemini_instruction)
     results_map = OrderedDict()
     for res in existing_results:
         rid = res.get("id")
@@ -370,6 +392,8 @@ def run_text_rapm_evaluation(
             continue
         model.init_chat(system_prompt)
         prompt = format_text_item_prompt(item, args.answer_mode)
+        if gemini_instruction:
+            prompt = _append_instruction(prompt, gemini_instruction)
         resp = model.send_message(prompt, cot=args.cot, truncate_history=True)
         if resp is None:
             # Record failure and continue without crashing
@@ -476,6 +500,7 @@ def run_text_rapm_evaluation(
 def batch_submit_rapm(args):
     if args.model_source != "openai":
         raise SystemExit("Batch mode only for openai source")
+    gemini_instruction = GEMINI_25_PRO_INSTRUCTION if _is_gemini_25_pro(args.model) else None
     model = ModelWrapper(
         args.model,
         args.model_source,
@@ -492,12 +517,16 @@ def batch_submit_rapm(args):
             limit_per_type=(args.limit_per_type if args.limit_per_type > 0 else None),
         )
         system_prompt = build_image_system_prompt(args)
-        requests = build_image_batch_requests(args, questions, system_prompt)
+        if gemini_instruction:
+            system_prompt = _append_instruction(system_prompt, gemini_instruction)
+        requests = build_image_batch_requests(args, questions, system_prompt, instruction_text=gemini_instruction)
         meta = {"task": "rapm_image", "count": str(len(questions)), "mode": "image"}
     else:
         items = load_text_rapm_jsonl(args.eval_data)
         system_prompt = build_text_system_prompt(args)
-        requests = build_text_batch_requests(args, items, system_prompt)
+        if gemini_instruction:
+            system_prompt = _append_instruction(system_prompt, gemini_instruction)
+        requests = build_text_batch_requests(args, items, system_prompt, instruction_text=gemini_instruction)
         meta = {"task": f"rapm_text_{args.answer_mode}", "count": str(len(items)), "mode": "text"}
     model.batch_create_requests(requests, args.batch_requests_path)
     batch_id = model.batch_submit(
