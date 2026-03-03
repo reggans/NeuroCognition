@@ -1,88 +1,99 @@
-# Security Audit Report
+# Security — Sensitive Data in Git History
 
-This document records the results of a security audit of the NeuroCognition repository's git history, performed to identify any sensitive information (API keys, credentials, private infrastructure URLs) that may have been committed.
+This document records sensitive data discovered in the repository's git history and the steps needed to fully remediate it.
 
-## Audit Summary
-
-**Date:** 2026-03-03  
-**Scope:** Full git commit history of the `reggans/NeuroCognition` repository  
-**Current main branch status:** ✅ Clean — no hardcoded secrets
+> **Current `main` branch is clean.** All secrets listed below exist only in old commits and must be purged via a history rewrite.
 
 ---
 
 ## Findings
 
-### 1. Private LiteLLM Proxy Server URL (HIGH)
+### 1. OpenAI API Key — `api_calc.ipynb` (CRITICAL)
 
-**Affected file:** `model_wrapper.py` (root-level, later moved to `shared/model_wrapper.py`)  
-**Affected commits:** Commits from approximately 2025-03-25 through 2025-05-03  
-**Example commit:** [`6c51410`](https://github.com/reggans/NeuroCognition/commit/6c51410c2a21c435a1c7fe6740cbd738f753170e)
+| Field | Value |
+|---|---|
+| File | `api_calc.ipynb` |
+| First introduced | commit `e632ade3` ("cards", 2025-08-08) |
+| Last present | commit `ef14d126` ("Merge image branch into main", 2025-08-11) — file removed from tree by this commit |
+| Type | OpenAI project API key (`sk-proj-…`) |
+| Exposure | Key was hardcoded in a source cell used to call the OpenAI Usage API for org `UILab` (`org-1p5YaTt9pETJtTo4ziKYao3U`) |
 
-**Description:**  
-A private institutional LiteLLM proxy server URL was hardcoded in `model_wrapper.py`:
-
-```python
-self.client = openai.OpenAI(
-    api_key=api_key,
-    base_url = "REMOVED"
-)
-```
-
-This URL identifies a private AI model proxy server belonging to an institutional lab. While no API key value was hardcoded (the key was correctly read from `LITELLM_API_KEY` environment variable), the server URL itself is sensitive infrastructure information.
-
-**Status:** Resolved in current `main` branch — the LiteLLM source was replaced with OpenRouter and other configurable endpoints in `shared/model_wrapper.py`.
-
-**Recommended action:** Rotate any `LITELLM_API_KEY` credentials that were used with this server, in case the URL exposure led to unauthorized access attempts.
+**Immediate action required:** rotate / revoke this key at https://platform.openai.com/api-keys before any remediation.
 
 ---
 
-### 2. Local Conda Environment Path (LOW)
+### 2. Private LiteLLM Proxy URL — `model_wrapper.py`
 
-**Affected file:** `environment.yml`  
-**Affected commits:** Commits prior to [`04424b2`](https://github.com/reggans/NeuroCognition/commit/04424b29b85513cd2aea4f7c587ab0d73098a2f0)
-
-**Description:**  
-The conda environment file contained a local filesystem path that revealed the developer's username and home directory structure:
-
-```yaml
-prefix: /home/faeyza/miniconda3/envs/swm
-```
-
-**Status:** Resolved — removed in the "anonymize repo" commit `04424b2`.
+| Field | Value |
+|---|---|
+| File | `model_wrapper.py` |
+| Commits | `6c51410` → `301cf1c` (2025-03-25 → 2025-05-03, ~25 commits) |
+| Type | Hardcoded internal server URL (`REMOVED`) |
+| Exposure | Institutional AI proxy server address exposed; no API key values were hardcoded |
 
 ---
 
-## Remediation Steps Taken
+### 3. Conda Environment Path — `environment.yml`
 
-1. **Current branch is clean:** All sensitive information has been removed from the current `main` branch.
-2. **Added `gitleaks.toml`:** Configured secret scanning rules to detect API keys, private URLs, and other credentials in future commits.
-3. **Added GitHub Actions workflow:** `.github/workflows/secret-scan.yml` runs gitleaks on every push and pull request, scanning the full commit history.
+| Field | Value |
+|---|---|
+| File | `environment.yml` |
+| Commit | before `04424b2` ("anonymize repo", 2026-01-29) |
+| Type | Local home directory path (`/home/faeyza/miniconda3/envs/swm`) |
+| Status | **Removed** by the "anonymize repo" commit (already clean on `main`) |
 
-## Remaining Risk
+---
 
-The old commits containing the LiteLLM URL remain accessible in the public git history on GitHub. To fully eliminate this risk:
+## Remediation — Rewriting Git History
 
-1. **Rotate credentials:** Rotate the `LITELLM_API_KEY` that was used with the `litellm.rum.uilab.kr` server.
-2. **Consider history rewrite:** Use [BFG Repo Cleaner](https://rtyley.github.io/bfg-repo-cleaner/) or `git filter-repo` to remove the sensitive commits from history, then force-push. This requires coordinating with all contributors.
+Because these secrets are embedded in old commits, adding them to `.gitignore` or deleting the files in a new commit is **not sufficient** — the old commits remain publicly readable.
+
+The only complete fix is to **rewrite history and force-push**. The repo owner must do this locally.
+
+### Option A — BFG Repo Cleaner (recommended)
 
 ```bash
-# Example using BFG Repo Cleaner (requires repository owner action)
-bfg --replace-text secrets.txt
+# 1. Clone a fresh mirror
+git clone --mirror https://github.com/reggans/NeuroCognition.git
+
+# 2. Download BFG: https://rtyley.github.io/bfg-repo-cleaner/
+
+# 3. Delete the notebook file from all history
+java -jar bfg.jar --delete-files api_calc.ipynb NeuroCognition.git
+
+# 4. Remove the hardcoded URL string from all blobs
+java -jar bfg.jar --replace-text <(echo 'REMOVED==>REMOVED') NeuroCognition.git
+
+# 5. Expire and pack
+cd NeuroCognition.git
 git reflog expire --expire=now --all
 git gc --prune=now --aggressive
-git push origin --force --all
+
+# 6. Force-push (coordinate with all collaborators first!)
+git push --force
 ```
 
-## Prevention
+### Option B — `git filter-repo`
 
-To prevent future secrets from being committed:
+```bash
+pip install git-filter-repo
 
-- **Never hardcode API keys, tokens, or private infrastructure URLs** in source code. Always use environment variables.
-- The `gitleaks` scanner (configured in `gitleaks.toml`) will automatically flag secrets on future pull requests.
-- Sensitive environment variable names used by this project:
-  - `OPENAI_API_KEY` — OpenAI API key
-  - `OPENROUTER_API_KEY` — OpenRouter API key  
-  - `GEMINI_API_KEY` — Google Gemini API key
-  - `GOOGLE_API_KEY` — Google API key (legacy)
-  - `HF_TOKEN` — HuggingFace access token
-  - `LITELLM_API_KEY` — LiteLLM proxy API key
+git clone https://github.com/reggans/NeuroCognition.git
+cd NeuroCognition
+
+# Remove file from all history
+git filter-repo --path api_calc.ipynb --invert-paths
+
+# Replace the URL in all blobs
+git filter-repo --replace-text <(echo 'REMOVED==>REMOVED')
+
+# Force-push
+git push origin --force --all
+git push origin --force --tags
+```
+
+### After force-pushing
+
+1. All collaborators must re-clone or run `git fetch --all && git reset --hard origin/main`.
+2. Ask GitHub Support to purge cached views: https://support.github.com/
+3. Verify with `git log --all -S "sk-proj-"` — should return no results.
