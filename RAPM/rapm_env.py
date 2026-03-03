@@ -14,6 +14,19 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.base_env import CognitiveEnv, StepResult, ActionStatus
 
+from RAPM.text_rapm.per_cell_constraints import CellConstraint
+from RAPM.text_rapm.validator import cell_satisfies, constraint_violations
+
+# =============================================================================
+# REWARD CONFIGURATION - Modify these values to tune reward structure
+# =============================================================================
+REWARD_CORRECT = 1.0           # Correct answer
+REWARD_INCORRECT = 0.0         # Wrong answer (valid format) - single-turn mode
+REWARD_WRONG_MULTITURN = -0.1  # Wrong answer in multi-turn mode (image-mc)
+REWARD_CONSTRAINT_VIOLATION = -0.1  # Penalty per constraint violation (text-mc)
+REWARD_MAX_TURNS_FAILED = -1.0  # Failed to answer correctly within turn limit (text-mc)
+REWARD_INVALID_FORMAT = -0.5   # Answer not parseable
+
 
 @dataclass
 class RAPMQuestion:
@@ -27,23 +40,23 @@ class RAPMQuestion:
     options: Optional[List[str]] = None  # For text-based MC
     categories: List[str] = field(default_factory=list)
     raw_data: Dict[str, Any] = field(default_factory=dict)
+    cell_constraint: Optional[Any] = None  # CellConstraint object for text mode
 
 
 class RAPMEnv(CognitiveEnv):
     """
     Raven's Progressive Matrices environment for RL training.
     
-    Unlike WCST/SWM, RAPM is typically evaluated as single-shot questions.
-    This environment supports:
-    - Single question mode: One question per episode
-    - Dataset mode: Iterate through a dataset of questions
+    Multi-turn environment with constraint-based feedback and progressive penalties.
     
-    Reward structure:
-    - +1.0 for correct answer
-    - 0.0 for incorrect answer
-    - -0.5 for invalid format
+    Reward structures by mode:
+        - Image-MC: Max 8 turns, -0.1 per wrong answer, +1.0 for correct,
+            and -1.0 final penalty if max turns reached without a correct answer
+    - Text-MC/Gen: Max turns = # of constraints, -0.1 × violations per wrong answer,
+      -1.0 if max turns reached, +1.0 for correct
+    - Invalid format: -0.5 penalty, max 3 retries
     
-    Episode ends after one valid attempt per question.
+    Episode ends when correct answer found or max turns/retries reached.
     """
     
     # System prompts
@@ -86,6 +99,7 @@ class RAPMEnv(CognitiveEnv):
         think_budget: int = 256,
         patterns: bool = False,  # Include pattern hints
         max_retries: int = 3,  # Max retries for invalid format
+        max_turns: int = 8,  # Max turns for multi-turn mode (image-mc)
         image_base_path: Optional[str] = None,  # Base path for resolving image paths
         image_only: bool = False,  # If True, observation only indicates image path
         seed: Optional[int] = None,
@@ -100,6 +114,7 @@ class RAPMEnv(CognitiveEnv):
             think_budget: Token budget for reasoning
             patterns: Whether to include pattern hints in prompt
             max_retries: Maximum retries for invalid format responses
+            max_turns: Maximum turns for multi-turn mode (image-mc only)
             image_base_path: Base directory for resolving relative image paths
             image_only: If True, observation only indicates image path (for multimodal models)
             seed: Random seed for reproducibility
@@ -112,6 +127,7 @@ class RAPMEnv(CognitiveEnv):
         self.think_budget = think_budget
         self.patterns = patterns
         self.max_retries = max_retries
+        self.max_turns = max_turns
         self.image_base_path = image_base_path
         self.image_only = image_only
         
@@ -192,6 +208,26 @@ class RAPMEnv(CognitiveEnv):
                 raw_data=data,
             )
         else:
+            # Extract cell constraint for text mode (cell 2,2 is the missing cell)
+            cell_constraint = None
+            if CellConstraint is not None:
+                cell_constraints = data.get("cell_constraints", {})
+                constraint_data = cell_constraints.get("2,2")
+                if constraint_data:
+                    try:
+                        cell_constraint = CellConstraint(
+                            fixed_length=constraint_data.get("fixed_length"),
+                            target_counts=constraint_data.get("target_counts", {}),
+                            parity_rules=constraint_data.get("parity_rules", {}),
+                            multiple_rules=constraint_data.get("multiple_rules", {}),
+                            unique_exact=constraint_data.get("unique_exact"),
+                            ordering=constraint_data.get("ordering"),
+                            positional_type=constraint_data.get("positional_type"),
+                            positional_index_rule=constraint_data.get("positional_index_rule"),
+                        )
+                    except Exception:
+                        pass
+            
             question = RAPMQuestion(
                 id=data.get("id", "unknown"),
                 question_type="text",
@@ -200,6 +236,7 @@ class RAPMEnv(CognitiveEnv):
                 options=data.get("options", []),
                 categories=data.get("credited_categories") or data.get("assigned_categories") or [],
                 raw_data=data,
+                cell_constraint=cell_constraint,
             )
         
         return self.set_question(question)
@@ -344,6 +381,10 @@ class RAPMEnv(CognitiveEnv):
             "status": status.value,
         }
         
+        # Determine if we're in multi-turn mode
+        is_multiturn = (self.mode == "image" and self.answer_mode == "mc")
+        is_multiturn_text = (self.mode == "text")
+        
         # Handle invalid format
         if status == ActionStatus.INVALID_FORMAT:
             step_info["is_correct"] = False
@@ -353,7 +394,7 @@ class RAPMEnv(CognitiveEnv):
                 self._done = True
                 return StepResult(
                     observation="",
-                    reward=-0.5,
+                    reward=REWARD_INVALID_FORMAT,
                     done=True,
                     info=step_info,
                     truncated=True
@@ -361,7 +402,7 @@ class RAPMEnv(CognitiveEnv):
             
             return StepResult(
                 observation="Please answer with the correct format: <answer>your answer</answer>",
-                reward=-0.5,
+                reward=REWARD_INVALID_FORMAT,
                 done=False,
                 info=step_info
             )
@@ -375,7 +416,7 @@ class RAPMEnv(CognitiveEnv):
                 self._done = True
                 return StepResult(
                     observation="",
-                    reward=-0.5,
+                    reward=REWARD_INVALID_FORMAT,
                     done=True,
                     info=step_info,
                     truncated=True
@@ -383,7 +424,7 @@ class RAPMEnv(CognitiveEnv):
             
             return StepResult(
                 observation="Please answer with a number between 1 and 8.",
-                reward=-0.5,
+                reward=REWARD_INVALID_FORMAT,
                 done=False,
                 info=step_info
             )
@@ -391,18 +432,104 @@ class RAPMEnv(CognitiveEnv):
         # Check correctness
         is_correct = self._check_answer(parsed_answer)
         step_info["is_correct"] = is_correct
+        
+        # Calculate constraint violations and max turns for text-mc
+        violations = 0
+        total_constraints = 1
+        if is_multiturn_text:
+            if self.answer_mode == "mc" and q.options:
+                # MC: map numeric choice to option text
+                if parsed_answer is not None and 1 <= parsed_answer <= len(q.options):
+                    answer_str = q.options[parsed_answer - 1]
+                    violations = self._count_constraint_violations(answer_str, q.cell_constraint)
+                    total_constraints = self._count_total_constraints(q.cell_constraint)
+            elif self.answer_mode == "gen" and isinstance(parsed_answer, str):
+                # Generative: use generated string directly
+                violations = self._count_constraint_violations(parsed_answer, q.cell_constraint)
+                total_constraints = self._count_total_constraints(q.cell_constraint)
+            
+            # Store metrics if computed
+            step_info["constraint_violations"] = violations
+            step_info["total_constraints"] = total_constraints
+            
+            # Set max_turns based on total constraints (only once per question)
+            if self._attempts == 1:
+                self.max_turns = total_constraints
+        
         self.history.append(step_info)
         
-        reward = 1.0 if is_correct else 0.0
-        self._done = True
-        self._answered = True
+        # Multi-turn mode for text (mc or gen) with constraint-based rewards
+        if is_multiturn_text:
+            if is_correct:
+                # Correct answer - episode ends with positive reward
+                reward = REWARD_CORRECT
+                self._done = True
+                self._answered = True
+                return StepResult(
+                    observation="",
+                    reward=reward,
+                    done=True,
+                    info=step_info
+                )
+            else:
+                # Wrong answer - penalty based on constraint violations
+                reward = REWARD_CONSTRAINT_VIOLATION * violations
+                
+                if self._attempts >= self.max_turns:
+                    # Max turns reached - apply final penalty and end
+                    reward = REWARD_MAX_TURNS_FAILED
+                    self._done = True
+                    return StepResult(
+                        observation="",
+                        reward=reward,
+                        done=True,
+                        info=step_info,
+                        truncated=True
+                    )
+                else:
+                    # Continue with feedback
+                    feedback = f"Incorrect. {violations} constraint(s) violated. Try again."
+                    return StepResult(
+                        observation=feedback,
+                        reward=reward,
+                        done=False,
+                        info=step_info
+                    )
         
-        return StepResult(
-            observation="",
-            reward=reward,
-            done=True,
-            info=step_info
-        )
+        # Multi-turn mode for image-mc (or fallback for any other configuration)
+        if is_correct:
+            # Correct answer - episode ends with positive reward
+            reward = REWARD_CORRECT
+            self._done = True
+            self._answered = True
+            return StepResult(
+                observation="",
+                reward=reward,
+                done=True,
+                info=step_info
+            )
+        else:
+            # Wrong answer - check if max turns reached
+            reward = REWARD_WRONG_MULTITURN
+            if self._attempts >= self.max_turns:
+                # Max turns reached - episode ends
+                reward = REWARD_MAX_TURNS_FAILED
+                self._done = True
+                return StepResult(
+                    observation="",
+                    reward=reward,
+                    done=True,
+                    info=step_info,
+                    truncated=True
+                )
+            else:
+                # Continue with feedback
+                return StepResult(
+                    observation="Incorrect. Try again.",
+                    reward=reward,
+                    done=False,
+                    info=step_info
+                )
     
     def _check_answer(self, predicted: Any) -> bool:
         """Check if the predicted answer is correct."""
@@ -414,11 +541,51 @@ class RAPMEnv(CognitiveEnv):
             # For MC, check if predicted (1-indexed) matches correct (0-indexed)
             return predicted is not None and (predicted - 1) == q.correct_answer
         else:
-            # For generative mode, need constraint checking
-            # This would require the constraint validator from rapm_utils
-            # For now, exact match with gold answer
-            gold = q.raw_data.get("answer")
-            return predicted == gold
+            # For generative mode, check if answer satisfies constraints
+            if cell_satisfies is None:
+                # Fallback to exact match if validator not available
+                gold = q.raw_data.get("answer")
+                return predicted == gold
+            else:
+                # Use constraint validation
+                return cell_satisfies(predicted, q.cell_constraint) if q.cell_constraint else False
+    
+    def _count_total_constraints(self, constraint: Any) -> int:
+        """Count the total number of constraints in a CellConstraint object."""
+        if constraint is None:
+            return 1  # Default to 1 constraint
+        
+        count = 0
+        # Count each type of constraint
+        if getattr(constraint, 'fixed_length', None) is not None:
+            count += 1
+        if getattr(constraint, 'target_counts', None) and constraint.target_counts:
+            count += len(constraint.target_counts)
+        if getattr(constraint, 'parity_rules', None) and constraint.parity_rules:
+            count += len(constraint.parity_rules)
+        if getattr(constraint, 'multiple_rules', None) and constraint.multiple_rules:
+            count += len(constraint.multiple_rules)
+        if getattr(constraint, 'unique_exact', None) is not None:
+            count += 1
+        if getattr(constraint, 'ordering', None) is not None:
+            count += 1
+        if getattr(constraint, 'positional_type', None) is not None:
+            count += 1
+        
+        return max(count, 1)  # At least 1 constraint
+    
+    def _count_constraint_violations(self, answer_str: str, constraint: Any) -> int:
+        """Count how many constraints are violated by the given answer.
+        
+        Uses the existing constraint_violations() from text_rapm.validator module.
+        """
+        if constraint is None or constraint_violations is None:
+            # If no constraint system available, return 1 for any wrong answer
+            return 1
+        
+        # Get list of violated constraint types
+        violations = constraint_violations(answer_str, constraint)
+        return len(violations)  # Return count of violation types
     
     def _get_internal_state(self) -> Dict[str, Any]:
         """Get internal state for serialization."""
@@ -461,11 +628,33 @@ class RAPMEnv(CognitiveEnv):
     def compute_episode_reward(self) -> float:
         """Compute total episode reward."""
         total = 0.0
-        for step in self.history:
+        is_multiturn_image = (self.mode == "image" and self.answer_mode == "mc")
+        is_multiturn_text = (self.mode == "text")
+        
+        for i, step in enumerate(self.history):
             if step.get("status") in [ActionStatus.INVALID_FORMAT.value, ActionStatus.INVALID_ACTION.value]:
-                total -= 0.5
+                total += REWARD_INVALID_FORMAT
             elif step.get("is_correct"):
-                total += 1.0
+                total += REWARD_CORRECT
+            else:
+                # Text-mc: constraint-based penalty
+                if is_multiturn_text:
+                    violations = step.get("constraint_violations", 1)
+                    # Check if this is the last step and max turns reached
+                    if i == len(self.history) - 1 and self._done:
+                        total += REWARD_MAX_TURNS_FAILED
+                    else:
+                        total += REWARD_CONSTRAINT_VIOLATION * violations
+                # Image-mc: fixed penalty
+                elif is_multiturn_image:
+                    # For image-mc, apply -1.0 if episode ended due to max turns; otherwise -0.1 per wrong turn
+                    if i == len(self.history) - 1 and self._done:
+                        total += REWARD_MAX_TURNS_FAILED
+                    else:
+                        total += REWARD_WRONG_MULTITURN
+                # Single-turn: no penalty
+                else:
+                    total += REWARD_INCORRECT
         return total
     
     def get_metrics(self) -> Dict[str, Any]:

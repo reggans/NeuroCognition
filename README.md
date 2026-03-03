@@ -23,6 +23,7 @@ Environment variables by source:
 
 - OPENAI_API_KEY (for `--model_source openai`)
 - OPENROUTER_API_KEY (for `--model_source openrouter`)
+- GEMINI_API_KEY (for `--model_source google`)
 - VLLM_URL (for `--model_source vllm`; server at http://$VLLM_URL:8877/v1)
 
 Show help:
@@ -35,7 +36,7 @@ Show help:
 Common flags (all tasks):
 
 - `--model` name (default varies by source)
-- `--model_source` `vllm|openai|openrouter` (default `vllm`)
+- `--model_source` `vllm|openai|openrouter|google` (default `vllm`)
 - `--max_tokens` int (default 512)
 - `--think_budget` int (reasoning budget; 64 for WCST/SWM, 256 for RAPM)
 - `--api_key` (optional; otherwise read from env)
@@ -67,7 +68,7 @@ Arguments:
 - `--notes-window` int (6) — note-taking window size
 - `--image` image-based WCST
 - `--bg-color` enable background color rule
-- `--model_source` `vllm|openai|openrouter` (default `vllm`)
+- `--model_source` `vllm|openai|openrouter|google` (default `vllm`)
 - `--max_tokens` (512), `--think_budget` (64), `--api_key`, `--verbose`
 
 Outputs:
@@ -87,7 +88,7 @@ Run examples:
 Arguments:
 
 - `--model` (default inferred from source if omitted)
-- `--model_source` `vllm|openai|openrouter` (default `vllm`)
+- `--model_source` `vllm|openai|openrouter|google` (default `vllm`)
 - `--n_boxes` int (6)
 - `--n_tokens` int (1)
 - `--cot` enable reasoning
@@ -174,6 +175,26 @@ Helper script: `./rapm_batch.sh submit|collect` shows multi-model batch runs.
 - vllm → `Qwen/Qwen3-32B`
 - openai → `o4-mini-2025-04-16`
 - openrouter → `qwen/qwen3-235b-a22b-07-25`
+
+---
+
+## Experimental: RL Training
+
+The repository includes experimental support for Multi-Task Multi-Token Group Relative Policy Optimization (MT-GRPO) training in `multi_task_mt_grpo_train.py`.
+
+It trains a single VLM on 13 setups across RAPM, WCST, and SWM (text/image variants).
+
+Usage:
+
+```bash
+# Full training
+python multi_task_mt_grpo_train.py --vllm_server_url http://localhost:8000
+
+# Quick debug run
+python multi_task_mt_grpo_train.py --quick_test
+```
+
+Note: This is experimental and requires additional dependencies (`trl`, `deepspeed`) and a running vLLM server for generation.
 
 ## Repo map
 

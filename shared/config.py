@@ -1,0 +1,71 @@
+import os
+from trl.trainer.grpo_config import GRPOConfig
+from typing import List, Optional
+
+
+def get_default_grpo_config(
+    num_gpus: int = 1,
+    run_name: Optional[str] = None,
+    reward_weights: Optional[List[float]] = None,
+    vllm_server_url: Optional[str] = None,
+) -> GRPOConfig:
+    """Get default GRPO configuration.
+
+    Args:
+        num_gpus: Number of GPUs for training
+        run_name: Name for the training run
+        reward_weights: Weights for reward functions
+        vllm_server_url: Optional external vLLM server URL. If None and using colocate mode,
+                        TRL will automatically spawn a vLLM server for this training run.
+    """
+    os.environ.setdefault("WANDB_PROJECT", "CognitiveEval-RL")
+
+    output_dir = f"outputs/{run_name}" if run_name else None
+
+    config_kwargs = {
+        "output_dir": output_dir,
+        "run_name": run_name,
+        "learning_rate": 1e-6,
+        "lr_scheduler_type": "constant_with_warmup",
+        "warmup_steps": 20,
+        "num_train_epochs": 1,
+        "bf16": True,
+        "adam_beta1": 0.9,
+        "adam_beta2": 0.99,
+        "max_grad_norm": 0.1,
+        "num_iterations": 1,
+        "beta": 0.04,
+        # max_prompt_length: None = no truncation (important for multi-turn where prompts grow)
+        # The prompt includes full conversation history, truncating would lose early context
+        "max_prompt_length": None,
+        # max_completion_length: Per-turn generation limit (NOT total episode tokens!)
+        # Episode token budget is controlled by max_episode_tokens in environment config
+        "max_completion_length": 4096,  # Per-turn limit for thinking + answer
+        "per_device_train_batch_size": 1,
+        "num_generations": 4,
+        "gradient_accumulation_steps": int(32 / num_gpus) if num_gpus > 1 else 16,
+        "gradient_checkpointing": True,
+        "save_strategy": "steps",
+        "save_steps": 100,
+        "save_only_model": True,
+        "use_vllm": True,
+        "vllm_max_model_length": 32768,  # Model context length (should match max_episode_tokens)
+        "vllm_gpu_memory_utilization": 0.8,  # Restored for server mode (separate GPU)
+        "logging_steps": 1,
+        "log_on_each_node": False,
+        "log_completions": True,
+        "report_to": "wandb",
+        "reward_weights": reward_weights,
+        "remove_unused_columns": False,  # Keep all columns (info, example_id, task)
+    }
+
+    # Set vLLM mode based on whether external server is provided
+    if vllm_server_url is not None:
+        # Connect to external vLLM server
+        config_kwargs["vllm_mode"] = "server"
+        config_kwargs["vllm_server_base_url"] = vllm_server_url
+    else:
+        # Auto-spawn colocated vLLM server
+        config_kwargs["vllm_mode"] = "colocate"
+
+    return GRPOConfig(**config_kwargs)
