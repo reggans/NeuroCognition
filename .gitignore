@@ -189,3 +189,15 @@ test_rapm_data.json
 sample_text_rapm.jsonl
 api_calc.ipynb
 *.sh
+
+# Credentials and secrets
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx
+secrets.txt
+secrets.json
+credentials.json
+service_account*.json
+*_credentials.json
