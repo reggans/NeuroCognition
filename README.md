@@ -1,5 +1,7 @@
 # NeuroCognition Benchmark Suite
 
+This repository contains the code implementation for the paper "A Neuropsychologically Grounded Evaluation of LLM Cognitive Abilities".
+
 A single entrypoint (`main.py`) to run three cognitive tests against LLMs:
 
 - WCST — Wisconsin Card Sorting Test (text or image)
@@ -180,3 +182,16 @@ Helper script: `./rapm_batch.sh submit|collect` shows multi-model batch runs.
 - `SWM/swm.py`, `SWM/image.py` — SWM (text/image)
 - `RAPM/rapm_evaluation.py`, `RAPM/rapm_utils.py` — RAPM logic
 - `shared/model_wrapper.py` — OpenAI/OpenRouter/vLLM wrapper + Batch helpers
+
+## Citation
+
+If you use this work, please cite the paper.
+
+```
+@misc{neurocognition2026,
+  title={A Neuropsychologically Grounded Evaluation of LLM Cognitive Abilities},
+  author={Faiz Ghifari Haznitrama, Faeyza Rishad Ardi and Alice Oh},
+  year={2026},
+  note={Preprint}
+}
+```
