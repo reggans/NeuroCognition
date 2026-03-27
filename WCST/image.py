@@ -2,7 +2,12 @@ from PIL import Image, ImageOps, ImageDraw, ImageFont
 import os
 
 
-def draw_five_cards(given_card_attributes, bg_color=False):
+def draw_five_cards(
+    given_card_attributes,
+    option_card_attributes=None,
+    bg_color=False,
+    save_path="WCST/images/current.png",
+):
     """
     Draw 5 cards on a white board with specified attributes.
 
@@ -49,8 +54,13 @@ def draw_five_cards(given_card_attributes, bg_color=False):
         4: [(25, 92), (67, 92), (25, 48), (67, 48)],
     }
 
-    # Define the first 4 cards attributes
-    if bg_color:
+    # Define the first 4 cards attributes.
+    # Backward-compatible fallback: canonical 4 cards when options are not provided.
+    if option_card_attributes is not None:
+        if len(option_card_attributes) != 4:
+            raise ValueError("option_card_attributes must contain exactly 4 card dicts")
+        predefined_cards = option_card_attributes
+    elif bg_color:
         predefined_cards = [
             {"shape": "circle", "color": "red", "count": 1, "background": "red"},
             {"shape": "triangle", "color": "green", "count": 2, "background": "green"},
@@ -126,8 +136,8 @@ def draw_five_cards(given_card_attributes, bg_color=False):
             (label_x - text_width // 2, label_y), labels[i], fill=(0, 0, 0), font=font
         )
 
-    # Save the board to images/current.png
-    save_path = "WCST/images/current.png"
+    # Save the board image.
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
     board.save(save_path)
     # print(f"Cards saved to {save_path}")
 

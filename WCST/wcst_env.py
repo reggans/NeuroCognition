@@ -459,12 +459,19 @@ class WCSTEnv(CognitiveEnv):
         if trial.given_attrs is None:
             return
 
-        # Generate the image
-        draw_five_cards(trial.given_attrs, bg_color=self.bg_color)
+        option_attrs: List[Dict[str, Any]] = [
+            self._parse_card_description(opt) for opt in trial.options
+        ]
 
-        # Update current image path
+        # Generate the image
         assert self.image_path is not None
         self._current_image_path = os.path.join(self.image_path, "current.png")
+        draw_five_cards(
+            trial.given_attrs,
+            option_card_attributes=option_attrs,
+            bg_color=self.bg_color,
+            save_path=self._current_image_path,
+        )
 
     def get_current_image_path(self) -> Optional[str]:
         """Get the path to the current image (image mode only)."""
