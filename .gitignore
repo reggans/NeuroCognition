@@ -177,6 +177,8 @@ wandb/
 outputs/
 logs/
 models/
+human_data/
+.github/
 
 data*/
 wcst_data*/
