@@ -209,10 +209,13 @@ Note: This is experimental and requires additional dependencies (`trl`, `deepspe
 If you use this work, please cite the paper.
 
 ```
-@misc{neurocognition2026,
-  title={A Neuropsychologically Grounded Evaluation of LLM Cognitive Abilities},
-  author={Faiz Ghifari Haznitrama, Faeyza Rishad Ardi and Alice Oh},
-  year={2026},
-  note={Preprint}
+@misc{haznitrama2026neuropsychologicallygroundedevaluationllm,
+      title={A Neuropsychologically Grounded Evaluation of LLM Cognitive Abilities}, 
+      author={Faiz Ghifari Haznitrama and Faeyza Rishad Ardi and Alice Oh},
+      year={2026},
+      eprint={2603.02540},
+      archivePrefix={arXiv},
+      primaryClass={cs.AI},
+      url={https://arxiv.org/abs/2603.02540}, 
 }
 ```
