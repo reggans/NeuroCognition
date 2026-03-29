@@ -23,6 +23,12 @@ from SWM.swm_env import SWMEnv
 from WCST.wcst_env import WCSTEnv
 
 
+RAPM_TEXT_DATA_PATH = os.path.join("eval_data", "text_rapm_min20_total200.jsonl")
+RAPM_IMAGE_DATA_PATH = os.path.join("eval_data", "raven_subset.json")
+RAPM_MAX_TEXT_QUESTIONS = 200
+RAPM_MAX_IMAGE_QUESTIONS = 140
+
+
 @dataclass
 class SessionSummary:
     participant_id: str
@@ -37,6 +43,8 @@ class SessionSummary:
 def _resolve_mode(task: str, setup: str) -> Tuple[str, bool]:
     if setup == "text":
         return "text", False
+    if setup == "image":
+        return "image", False
     if setup == "image+text":
         return "image", False
     if setup == "image-only":
@@ -97,6 +105,24 @@ def _rapm_metrics(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _format_metrics_for_task(task: str, metrics: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize task metrics for participant display and exported summaries."""
+    if task != "wcst":
+        return metrics
+
+    view = dict(metrics)
+    s_wcst = view.get("S_wcst")
+    if s_wcst is None:
+        s_wcst = view.get("wcst_score")
+    if s_wcst is None:
+        s_wcst = 0.0
+
+    view["S_wcst"] = s_wcst
+    view["wcst_score"] = s_wcst
+    view.pop("accuracy", None)
+    return view
+
+
 def _build_filename(state: Dict[str, Any]) -> str:
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     pid = re.sub(r"[^a-zA-Z0-9_-]", "_", state["participant_id"]) or "participant"
@@ -106,9 +132,12 @@ def _build_filename(state: Dict[str, Any]) -> str:
 def _persist_session(state: Dict[str, Any]) -> str:
     output_dir = state["output_dir"]
     os.makedirs(output_dir, exist_ok=True)
-    final_metrics = (
-        _rapm_metrics(state) if state["task"] == "rapm" else state["env"].get_metrics()
-    )
+    if state["task"] == "rapm":
+        final_metrics = _rapm_metrics(state)
+    else:
+        final_metrics = _format_metrics_for_task(
+            state["task"], state["env"].get_metrics()
+        )
     summary = SessionSummary(
         participant_id=state["participant_id"],
         task=state["task"],
@@ -140,8 +169,7 @@ def _start_session(
     wcst_num_correct: int,
     wcst_bg_color: bool,
     wcst_ambiguous: str,
-    rapm_eval_data: str,
-    rapm_answer_mode: str,
+    rapm_n_questions: int,
     output_dir: str,
 ) -> Tuple[Dict[str, Any], str, Optional[str], str, Dict[str, Any], str]:
     participant_id = participant_id.strip() or "participant"
@@ -170,8 +198,9 @@ def _start_session(
             "wcst_num_correct": wcst_num_correct,
             "wcst_bg_color": wcst_bg_color,
             "wcst_ambiguous": wcst_ambiguous,
-            "rapm_eval_data": rapm_eval_data,
-            "rapm_answer_mode": rapm_answer_mode,
+            "rapm_n_questions": rapm_n_questions,
+            "rapm_text_data": RAPM_TEXT_DATA_PATH,
+            "rapm_image_data": RAPM_IMAGE_DATA_PATH,
         },
     }
 
@@ -186,7 +215,7 @@ def _start_session(
         observation = env.reset()
         state["env"] = env
         image_path = env.get_current_image_path() if env_mode == "image" else None
-        metrics = env.get_metrics()
+        metrics = _format_metrics_for_task(task, env.get_metrics())
         visible_obs = "" if image_only else _clean_observation(observation)
         return state, visible_obs, image_path, "Session started.", metrics, "Running"
 
@@ -204,7 +233,7 @@ def _start_session(
         observation = env.reset()
         state["env"] = env
         image_path = env.get_current_image_path() if env_mode == "image" else None
-        metrics = env.get_metrics()
+        metrics = _format_metrics_for_task(task, env.get_metrics())
         visible_obs = "" if image_only else _clean_observation(observation)
         return state, visible_obs, image_path, "Session started.", metrics, "Running"
 
@@ -218,27 +247,42 @@ def _start_session(
             "Error",
         )
 
-    if not rapm_eval_data or not os.path.exists(rapm_eval_data):
-        return (
-            state,
-            "",
-            None,
-            "RAPM eval_data path is missing or invalid.",
-            {},
-            "Error",
-        )
-
-    state["rapm_eval_data"] = rapm_eval_data
-    state["rapm_answer_mode"] = rapm_answer_mode
+    state["rapm_answer_mode"] = "mc"
     state["rapm_index"] = 0
     state["rapm_answered"] = 0
     state["rapm_correct"] = 0
 
+    n_questions = max(1, int(rapm_n_questions))
+
     if env_mode == "image":
-        state["rapm_questions"] = load_evaluation_data(rapm_eval_data)
+        if not os.path.exists(RAPM_IMAGE_DATA_PATH):
+            return (
+                state,
+                "",
+                None,
+                f"RAPM image data not found: {RAPM_IMAGE_DATA_PATH}",
+                {},
+                "Error",
+            )
+        state["rapm_eval_data"] = RAPM_IMAGE_DATA_PATH
+        questions = load_evaluation_data(RAPM_IMAGE_DATA_PATH)
+        limit = min(n_questions, RAPM_MAX_IMAGE_QUESTIONS, len(questions))
+        state["rapm_questions"] = questions[:limit]
         state["rapm_total"] = len(state["rapm_questions"])
     else:
-        state["rapm_items"] = load_text_rapm_jsonl(rapm_eval_data)
+        if not os.path.exists(RAPM_TEXT_DATA_PATH):
+            return (
+                state,
+                "",
+                None,
+                f"RAPM text data not found: {RAPM_TEXT_DATA_PATH}",
+                {},
+                "Error",
+            )
+        state["rapm_eval_data"] = RAPM_TEXT_DATA_PATH
+        items = load_text_rapm_jsonl(RAPM_TEXT_DATA_PATH)
+        limit = min(n_questions, RAPM_MAX_TEXT_QUESTIONS, len(items))
+        state["rapm_items"] = items[:limit]
         state["rapm_total"] = len(state["rapm_items"])
 
     if state["rapm_total"] == 0:
@@ -353,7 +397,7 @@ def _submit_answer(
     env = state["env"]
     step = env.step(wrapped)
     image_path = env.get_current_image_path() if state["mode"] == "image" else None
-    metrics = env.get_metrics()
+    metrics = _format_metrics_for_task(task, env.get_metrics())
     feedback = f"Status: {step.info.get('status')} | Reward: {step.reward}"
 
     state["turn_logs"].append(
@@ -411,22 +455,24 @@ You will be shown a given card and four option cards. Your task is to match the 
 - Number of symbols (one, two, three, four)
 - Color (red, green, blue, yellow)
 - Shape (circle, triangle, star, square)
+- Background color (only if enabled by the test administrator)
 
 **How it works:**
 1. The system will tell you "Correct!" or "Incorrect. Please try again."
 2. If incorrect, either you made a mistake OR the rule has changed.
-3. When you get 5 correct answers in a row, the sorting rule changes.
-4. Your answer should be a single number: 1, 2, 3, or 4.
+3. If you think you made a mistake, adjust and try again.
+4. If you think the rule changed, infer the new rule from feedback.
+5. Your answer should be a single number: 1, 2, 3, or 4.
 """,
         "swm": """**Spatial Working Memory (SWM) Test**
 
-You will see a grid of closed boxes. Your task is to find tokens (one at a time) hidden in the boxes.
+You will see a grid of closed boxes. Your task is to find token types hidden in boxes.
 
 **How it works:**
-1. Each box contains at most one token.
-2. Once you find a token in a box, that box will never contain another token.
-3. You must remember which boxes you've already opened.
-4. Try to find all tokens with as few errors as possible.
+1. There can be one or multiple token types, depending on the setup.
+2. A box may contain multiple token types, but each token type can appear at most once in that box.
+3. Once a token type is found in a box, that same token type will never appear in that box again.
+4. You must use feedback from previous choices to guide your next choice.
 
 **Answering:**
 - Enter the coordinates of a box to open it.
@@ -441,7 +487,8 @@ Your task is to find the pattern and select the correct option that completes th
 **How it works:**
 1. Analyze the matrix image to identify the pattern.
 2. Choose the option number (1-8) that best completes the pattern.
-3. There are no correct answers provided; you must find the pattern yourself.
+3. After you submit an answer, the test automatically moves to the next question.
+4. There are no correct answers provided; you must find the pattern yourself.
 """,
     }
     return instrs.get(task, "")
@@ -497,10 +544,15 @@ def launch_human_benchmark(args: Any) -> None:
                             label="SWM: Number of Boxes",
                         )
                     with gr.Group(visible=False) as rapm_task_group:
-                        rapm_answer_mode_setup = gr.Dropdown(
-                            choices=["mc", "gen"],
-                            value="mc",
-                            label="RAPM: Answer Mode",
+                        gr.Markdown(
+                            "RAPM uses fixed datasets: text from eval_data/text_rapm_min20_total200.jsonl and image from eval_data/raven_subset.json (images in eval_data/images)."
+                        )
+                        rapm_n_questions_setup = gr.Slider(
+                            minimum=1,
+                            maximum=RAPM_MAX_TEXT_QUESTIONS,
+                            step=1,
+                            value=20,
+                            label="RAPM: Number of Questions",
                         )
 
                 # Researcher-only settings (hidden by default)
@@ -536,10 +588,8 @@ def launch_human_benchmark(args: Any) -> None:
                         )
 
                     with gr.Group(visible=False) as rapm_research_group:
-                        rapm_eval_data_adv = gr.Textbox(
-                            label="RAPM eval_data path",
-                            placeholder="Path to RAPM evaluation data JSON",
-                            value="",
+                        gr.Markdown(
+                            f"Fixed RAPM datasets:\n- Text: {RAPM_TEXT_DATA_PATH}\n- Image: {RAPM_IMAGE_DATA_PATH}"
                         )
 
                 researcher_toggle = gr.Checkbox(
@@ -579,14 +629,14 @@ def launch_human_benchmark(args: Any) -> None:
                         swm_research = gr.update(visible=show_researcher)
                         rapm_research = gr.update(visible=False)
                     else:
-                        setup = gr.update(choices=["text", "image+text"], value="text")
-                        researcher_panel = gr.update(visible=show_researcher)
+                        setup = gr.update(choices=["text", "image"], value="text")
+                        researcher_panel = gr.update(visible=False)
                         wcst_task = gr.update(visible=False)
                         swm_task = gr.update(visible=False)
                         rapm_task = gr.update(visible=True)
                         wcst_research = gr.update(visible=False)
                         swm_research = gr.update(visible=False)
-                        rapm_research = gr.update(visible=show_researcher)
+                        rapm_research = gr.update(visible=False)
 
                     return (
                         setup,
@@ -598,6 +648,17 @@ def launch_human_benchmark(args: Any) -> None:
                         swm_research,
                         rapm_research,
                     )
+
+                def update_rapm_question_limit(tsk, setup, current_value):
+                    if tsk != "rapm":
+                        return gr.update()
+                    if setup == "image":
+                        max_q = RAPM_MAX_IMAGE_QUESTIONS
+                    else:
+                        max_q = RAPM_MAX_TEXT_QUESTIONS
+                    value = int(current_value) if current_value is not None else max_q
+                    value = max(1, min(value, max_q))
+                    return gr.update(maximum=max_q, value=value)
 
                 task.change(
                     fn=update_task_controls,
@@ -631,6 +692,13 @@ def launch_human_benchmark(args: Any) -> None:
                     queue=False,
                 )
 
+                setup_type.change(
+                    fn=update_rapm_question_limit,
+                    inputs=[task, setup_type, rapm_n_questions_setup],
+                    outputs=[rapm_n_questions_setup],
+                    queue=False,
+                )
+
                 status_setup = gr.Textbox(
                     label="Status", interactive=False, value="Ready"
                 )
@@ -646,8 +714,7 @@ def launch_human_benchmark(args: Any) -> None:
                     wcst_num,
                     wcst_bg,
                     wcst_amb,
-                    rapm_data,
-                    rapm_mode,
+                    rapm_n_questions,
                     out_dir,
                 ):
                     try:
@@ -662,38 +729,33 @@ def launch_human_benchmark(args: Any) -> None:
                             wcst_num,
                             wcst_bg,
                             wcst_amb,
-                            rapm_data,
-                            rapm_mode,
+                            rapm_n_questions,
                             out_dir,
                         )
                         # Store observation and image in state for sync to test tab
                         st["_initial_observation"] = obs
                         st["_initial_image"] = img
+                        st["_current_observation"] = obs
+                        st["_current_image"] = img
                         return st, stat
                     except Exception as e:
                         return {}, f"Error: {str(e)}"
 
                 start_btn = gr.Button("Start Test", variant="primary", size="lg")
-                start_btn.click(
-                    fn=start_task,
-                    inputs=[
-                        participant_id,
-                        task,
-                        setup_type,
-                        swm_boxes_setup,
-                        swm_tokens_adv,
-                        wcst_variant_setup,
-                        wcst_max_trials_adv,
-                        wcst_num_correct_adv,
-                        wcst_bg_color_adv,
-                        wcst_ambiguous_adv,
-                        rapm_eval_data_adv,
-                        rapm_answer_mode_setup,
-                        output_dir_state,
-                    ],
-                    outputs=[session_state, status_setup],
-                    queue=False,
-                )
+                start_inputs = [
+                    participant_id,
+                    task,
+                    setup_type,
+                    swm_boxes_setup,
+                    swm_tokens_adv,
+                    wcst_variant_setup,
+                    wcst_max_trials_adv,
+                    wcst_num_correct_adv,
+                    wcst_bg_color_adv,
+                    wcst_ambiguous_adv,
+                    rapm_n_questions_setup,
+                    output_dir_state,
+                ]
 
             # ========== TEST TAB ==========
             with gr.Tab("Test") as test_tab:
@@ -705,7 +767,7 @@ def launch_human_benchmark(args: Any) -> None:
                     label="Prompt", lines=8, interactive=False, value=""
                 )
                 stimulus_image = gr.Image(
-                    label="Image", type="filepath", interactive=False
+                    label="Image", type="filepath", interactive=False, height=800
                 )
 
                 answer = gr.Textbox(
@@ -729,6 +791,30 @@ def launch_human_benchmark(args: Any) -> None:
                     if not state or state.get("done"):
                         return state or {}, "", None, "", {}, "Idle", ""
 
+                    if not (ans or "").strip():
+                        current_obs = state.get("_current_observation", "")
+                        current_img = state.get("_current_image")
+                        if state.get("task") == "rapm":
+                            current_metrics = _rapm_metrics(state)
+                        else:
+                            env = state.get("env")
+                            current_metrics = (
+                                _format_metrics_for_task(
+                                    state.get("task", ""), env.get_metrics()
+                                )
+                                if env
+                                else {}
+                            )
+                        return (
+                            state,
+                            current_obs,
+                            current_img,
+                            "Please enter an answer before submitting.",
+                            current_metrics,
+                            "Running",
+                            "",
+                        )
+
                     wrapped = _wrap_answer(ans)
                     dt = max(
                         0.0,
@@ -738,6 +824,8 @@ def launch_human_benchmark(args: Any) -> None:
 
                     if task_name == "rapm":
                         obs, img, fb, met, stat = _step_rapm(state, wrapped, dt)
+                        state["_current_observation"] = obs
+                        state["_current_image"] = img
                         if state.get("done"):
                             return state, "", img, fb, met, "Completed", ""
                         state["prompt_shown_at"] = time.time()
@@ -762,6 +850,7 @@ def launch_human_benchmark(args: Any) -> None:
                             else None
                         )
                         met = env.get_metrics()
+                        met = _format_metrics_for_task(task_name, met)
                         fb = f"Reward: {step.reward}"
 
                         state["turn_logs"].append(
@@ -779,6 +868,8 @@ def launch_human_benchmark(args: Any) -> None:
                         if step.done:
                             state["done"] = True
                             out_path = _persist_session(state)
+                            state["_current_observation"] = ""
+                            state["_current_image"] = image_path
                             return (
                                 state,
                                 "",
@@ -795,6 +886,8 @@ def launch_human_benchmark(args: Any) -> None:
                             if state.get("image_only")
                             else _clean_observation(step.observation)
                         )
+                        state["_current_observation"] = next_obs
+                        state["_current_image"] = image_path
                         return state, next_obs, image_path, fb, met, "Running", ""
 
                 submit_btn.click(
@@ -856,11 +949,43 @@ def launch_human_benchmark(args: Any) -> None:
                     if not state or not state.get("participant_id"):
                         return "", "", None, "", {}, "Idle"
 
-                    info = f"{state['participant_id']} | {state['task']}"
-                    obs = state.get("_initial_observation", "")
-                    img = state.get("_initial_image")
-                    fb = "Ready for your first answer"
-                    return info, obs, img, fb, {}, "Running"
+                    info = f"{state['participant_id']} | {state['task']} | {state.get('setup', '')}"
+                    obs = state.get(
+                        "_current_observation", state.get("_initial_observation", "")
+                    )
+                    img = state.get("_current_image", state.get("_initial_image"))
+                    if state.get("task") == "rapm":
+                        current_metrics = _rapm_metrics(state)
+                    else:
+                        env = state.get("env")
+                        current_metrics = (
+                            _format_metrics_for_task(
+                                state.get("task", ""), env.get_metrics()
+                            )
+                            if env
+                            else {}
+                        )
+                    fb = "Session started. Submit your answer."
+                    return info, obs, img, fb, current_metrics, "Running"
+
+                start_btn.click(
+                    fn=start_task,
+                    inputs=start_inputs,
+                    outputs=[session_state, status_setup],
+                    queue=False,
+                ).then(
+                    fn=sync_session,
+                    inputs=[session_state],
+                    outputs=[
+                        session_info,
+                        observation,
+                        stimulus_image,
+                        feedback,
+                        metrics,
+                        status,
+                    ],
+                    queue=False,
+                )
 
                 session_state.change(
                     fn=sync_session,
