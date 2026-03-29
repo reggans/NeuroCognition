@@ -423,27 +423,29 @@ class WCSTEnv(CognitiveEnv):
         # Shape options
         shapes = ["circle", "triangle", "star", "square"]
 
-        attrs: Dict[str, Any] = {"shape": "circle", "color": "red", "count": 1}
+        attrs: Dict[str, Any] = {}
+        seen_colors: List[str] = []
 
         for part in parts:
-            if part in number_map:
+            normalized = part.rstrip("s")
+            if part in number_map and "count" not in attrs:
                 attrs["count"] = number_map[part]
+            elif normalized in shapes and "shape" not in attrs:
+                attrs["shape"] = normalized
             elif part in colors:
-                # Could be shape color or background
-                if "color" not in attrs or attrs.get("color") == "red":
-                    attrs["color"] = part
-                else:
-                    attrs["background"] = part
-            elif part in shapes:
-                attrs["shape"] = part
+                seen_colors.append(part)
 
-        # If bg_color mode and we have a background in the description
-        if self.bg_color and len(parts) > 3:
-            # The last color mentioned is likely the background
-            for part in reversed(parts):
-                if part in colors and part != attrs.get("color"):
-                    attrs["background"] = part
-                    break
+        # Default fallbacks
+        attrs.setdefault("count", 1)
+        attrs.setdefault("shape", "circle")
+        attrs["color"] = seen_colors[0] if seen_colors else "red"
+
+        # In bg mode, background is the second color if present; otherwise same as foreground.
+        if self.bg_color:
+            if len(seen_colors) >= 2:
+                attrs["background"] = seen_colors[1]
+            else:
+                attrs["background"] = attrs["color"]
 
         return attrs
 
@@ -672,10 +674,6 @@ class WCSTEnv(CognitiveEnv):
         is_first_after_rule_change = self._first_after_rule_change
         self._first_after_rule_change = False
 
-        # Check if this is a repeated option guess (before updating seen_options)
-        if parsed_action is not None and parsed_action in self._seen_options_this_rule:
-            is_repeat = True
-
         if correct:
             self._feedback = "Correct!\n"
             self._consecutive_correct += 1
@@ -715,6 +713,10 @@ class WCSTEnv(CognitiveEnv):
         else:
             # Error - check for WCST-specific error types
             reward = self.reward_incorrect
+
+            # Repeat means repeating an incorrect option guess within the current rule cycle.
+            if parsed_action is not None and parsed_action in self._seen_options_this_rule:
+                is_repeat = True
 
             # Track this option as seen (for repeat detection)
             if parsed_action is not None:
@@ -931,12 +933,15 @@ class WCSTEnv(CognitiveEnv):
             1 for s in self.history if s.get("is_failure_to_maintain")
         )
         repeat_errors = sum(1 for s in self.history if s.get("is_repeat"))
+        s_wcst = self._compute_s_wcst()
 
         return {
             "total_trials": total_trials,
             "valid_trials": valid_trials,
             "correct_trials": correct_trials,
             "accuracy": correct_trials / valid_trials if valid_trials > 0 else 0.0,
+            "S_wcst": s_wcst,
+            "wcst_score": s_wcst,
             "completed_categories": self._completed_categories,
             "rule_cycles_completed": self._rule_cycle,
             # WCST-specific error metrics
@@ -950,3 +955,48 @@ class WCSTEnv(CognitiveEnv):
             "conceptual_responses": self._conceptual_responses,
             "episode_reward": self.compute_episode_reward(),
         }
+
+    def _compute_s_wcst(self) -> float:
+        """Compute single-episode S_wcst using the same rule-efficiency idea as wcst_analysis."""
+        if not self.history:
+            return 0.0
+
+        s_ri_values: List[float] = []
+        unique_rules = set()
+
+        current_rule: Optional[str] = None
+        current_rule_guesses = 0
+        current_rule_correct = 0
+
+        for step in self.history:
+            rule_name = step.get("rule")
+            if rule_name is None:
+                continue
+
+            if rule_name != current_rule:
+                if (
+                    current_rule is not None
+                    and self.num_correct
+                    and current_rule_correct >= self.num_correct
+                ):
+                    s_ri_values.append(self.num_correct / max(current_rule_guesses, 1))
+                current_rule = rule_name
+                current_rule_guesses = 0
+                current_rule_correct = 0
+
+            current_rule_guesses += 1
+            unique_rules.add(rule_name)
+
+            if step.get("correct"):
+                current_rule_correct += 1
+
+        if (
+            current_rule is not None
+            and self.num_correct
+            and current_rule_correct >= self.num_correct
+        ):
+            s_ri_values.append(self.num_correct / max(current_rule_guesses, 1))
+
+        num_attributes = len(unique_rules)
+        total_rules_required = 2 * num_attributes if num_attributes else 1
+        return sum(s_ri_values) / total_rules_required if s_ri_values else 0.0
