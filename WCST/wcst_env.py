@@ -715,7 +715,10 @@ class WCSTEnv(CognitiveEnv):
             reward = self.reward_incorrect
 
             # Repeat means repeating an incorrect option guess within the current rule cycle.
-            if parsed_action is not None and parsed_action in self._seen_options_this_rule:
+            if (
+                parsed_action is not None
+                and parsed_action in self._seen_options_this_rule
+            ):
                 is_repeat = True
 
             # Track this option as seen (for repeat detection)

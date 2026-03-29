@@ -178,8 +178,9 @@ outputs/
 logs/
 models/
 human_data/
-.github/
 eval_data/
+.github/
+.gradio/
 
 data*/
 wcst_data*/
