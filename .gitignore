@@ -179,6 +179,7 @@ logs/
 models/
 human_data/
 .github/
+eval_data/
 
 data*/
 wcst_data*/
