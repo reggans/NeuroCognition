@@ -4,12 +4,18 @@
 import json
 import os
 import re
+import secrets
+import shutil
 import sys
 import time
+import html
+import uuid
+import base64
 from dataclasses import dataclass
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import parse_qs, quote
 
 from RAPM.rapm_evaluation import load_evaluation_data, load_text_rapm_jsonl
 from RAPM.rapm_utils import (
@@ -27,6 +33,136 @@ RAPM_TEXT_DATA_PATH = os.path.join("eval_data", "text_rapm_min20_total200.jsonl"
 RAPM_IMAGE_DATA_PATH = os.path.join("eval_data", "raven_subset.json")
 RAPM_MAX_TEXT_QUESTIONS = 200
 RAPM_MAX_IMAGE_QUESTIONS = 140
+PARTICIPANT_MODE = "participant"
+TASK_SETUP_CHOICES: Dict[str, List[str]] = {
+    "wcst": ["text", "image+text"],
+    "swm": ["text", "image+text", "image-only"],
+    "rapm": ["text", "image"],
+}
+
+# Tokenized preset configs for participant links (lives while app process runs).
+PRESET_STORE: Dict[str, Dict[str, Any]] = {}
+RUN_COUNTERS: Dict[str, int] = {}
+
+
+def _slugify_token(value: str) -> str:
+    text = (value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    text = re.sub(r"-+", "-", text).strip("-")
+    return text or "participant"
+
+
+def _settings_signature(
+    task: str,
+    swm_boxes: int,
+    swm_tokens: int,
+    wcst_variant: str,
+    wcst_max_trials: int,
+    wcst_num_correct: int,
+    wcst_bg_color: bool,
+    wcst_ambiguous: str,
+    rapm_n_questions: int,
+) -> str:
+    if task == "swm":
+        return f"b{int(swm_boxes)}-t{int(swm_tokens)}"
+    if task == "wcst":
+        variant = _slugify_token(wcst_variant)
+        ambiguous = _slugify_token(wcst_ambiguous)
+        bg = "1" if wcst_bg_color else "0"
+        return (
+            f"v{variant}-m{int(wcst_max_trials)}"
+            f"-c{int(wcst_num_correct)}-bg{bg}-a{ambiguous}"
+        )
+    return f"n{int(rapm_n_questions)}"
+
+
+def _participant_base_id(
+    participant_name: str,
+    task: str,
+    setup: str,
+    swm_boxes: int,
+    swm_tokens: int,
+    wcst_variant: str,
+    wcst_max_trials: int,
+    wcst_num_correct: int,
+    wcst_bg_color: bool,
+    wcst_ambiguous: str,
+    rapm_n_questions: int,
+) -> str:
+    name_part = _slugify_token(participant_name)
+    task_part = _slugify_token(task)
+    setup_part = _slugify_token(setup)
+    settings_part = _settings_signature(
+        task,
+        swm_boxes,
+        swm_tokens,
+        wcst_variant,
+        wcst_max_trials,
+        wcst_num_correct,
+        wcst_bg_color,
+        wcst_ambiguous,
+        rapm_n_questions,
+    )
+    return f"{name_part}_{task_part}_{setup_part}_{settings_part}"
+
+
+def _detect_max_run_number(base_id: str, output_dir: str) -> int:
+    if not output_dir or not os.path.isdir(output_dir):
+        return 0
+
+    pattern = re.compile(rf"^{re.escape(base_id)}_run(\\d+)_")
+    max_run = 0
+    for filename in os.listdir(output_dir):
+        match = pattern.match(filename)
+        if not match:
+            continue
+        try:
+            run_num = int(match.group(1))
+        except ValueError:
+            continue
+        max_run = max(max_run, run_num)
+    return max_run
+
+
+def _reserve_next_run(base_id: str, output_dir: str) -> int:
+    existing_max = _detect_max_run_number(base_id, output_dir)
+    current = max(existing_max, RUN_COUNTERS.get(base_id, 0))
+    next_run = current + 1
+    RUN_COUNTERS[base_id] = next_run
+    return next_run
+
+
+def _generate_participant_identity(
+    participant_name: str,
+    task: str,
+    setup: str,
+    swm_boxes: int,
+    swm_tokens: int,
+    wcst_variant: str,
+    wcst_max_trials: int,
+    wcst_num_correct: int,
+    wcst_bg_color: bool,
+    wcst_ambiguous: str,
+    rapm_n_questions: int,
+    output_dir: str,
+) -> Tuple[str, str]:
+    display_name = (participant_name or "").strip() or "participant"
+    base_id = _participant_base_id(
+        display_name,
+        task,
+        setup,
+        swm_boxes,
+        swm_tokens,
+        wcst_variant,
+        wcst_max_trials,
+        wcst_num_correct,
+        wcst_bg_color,
+        wcst_ambiguous,
+        rapm_n_questions,
+    )
+    run_number = _reserve_next_run(base_id, output_dir)
+    participant_id = f"{base_id}_run{run_number:02d}"
+    return display_name, participant_id
 
 
 @dataclass
@@ -50,6 +186,11 @@ def _resolve_mode(task: str, setup: str) -> Tuple[str, bool]:
     if setup == "image-only":
         return "image", True
     raise ValueError(f"Unknown setup: {setup}")
+
+
+def _normalize_setup_for_task(task: str, setup: str) -> str:
+    allowed = TASK_SETUP_CHOICES.get(task, ["text"])
+    return setup if setup in allowed else allowed[0]
 
 
 def _wrap_answer(answer: str) -> str:
@@ -123,10 +264,223 @@ def _format_metrics_for_task(task: str, metrics: Dict[str, Any]) -> Dict[str, An
     return view
 
 
+def _build_preset_config(
+    participant_name: str,
+    participant_id: str,
+    history_enabled: bool,
+    task: str,
+    setup: str,
+    swm_boxes: int,
+    swm_tokens: int,
+    wcst_variant: str,
+    wcst_max_trials: int,
+    wcst_num_correct: int,
+    wcst_bg_color: bool,
+    wcst_ambiguous: str,
+    rapm_n_questions: int,
+) -> Dict[str, Any]:
+    return {
+        "participant_name": participant_name,
+        "participant_id": participant_id,
+        "history_enabled": bool(history_enabled),
+        "task": task,
+        "setup": setup,
+        "swm_boxes": int(swm_boxes),
+        "swm_tokens": int(swm_tokens),
+        "wcst_variant": wcst_variant,
+        "wcst_max_trials": int(wcst_max_trials),
+        "wcst_num_correct": int(wcst_num_correct),
+        "wcst_bg_color": bool(wcst_bg_color),
+        "wcst_ambiguous": wcst_ambiguous,
+        "rapm_n_questions": int(rapm_n_questions),
+        "created_at": datetime.utcnow().isoformat(),
+    }
+
+
+def _register_preset(config: Dict[str, Any]) -> str:
+    token = secrets.token_urlsafe(16)
+    PRESET_STORE[token] = dict(config)
+    return token
+
+
+def _get_preset(token: str) -> Optional[Dict[str, Any]]:
+    if not token:
+        return None
+    cfg = PRESET_STORE.get(token)
+    return dict(cfg) if cfg else None
+
+
+def _extract_query_params(request: Any) -> Dict[str, str]:
+    if request is None:
+        return {}
+
+    candidates = [
+        getattr(request, "query_params", None),
+        getattr(getattr(request, "request", None), "query_params", None),
+    ]
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        try:
+            return {str(k): str(v) for k, v in candidate.items()}
+        except Exception:
+            pass
+
+    req_obj = getattr(request, "request", None)
+    url = getattr(req_obj, "url", None) or getattr(request, "url", None)
+    if url is not None:
+        raw_query = getattr(url, "query", "")
+        parsed = parse_qs(raw_query)
+        return {k: (v[-1] if v else "") for k, v in parsed.items()}
+
+    return {}
+
+
+def _infer_request_origin(request: Any, args: Any) -> str:
+    req_obj = getattr(request, "request", request)
+    headers = getattr(req_obj, "headers", {}) or {}
+
+    scheme = headers.get("x-forwarded-proto")
+    host = headers.get("x-forwarded-host") or headers.get("host")
+
+    url = getattr(req_obj, "url", None)
+    if url is not None:
+        if not scheme:
+            scheme = getattr(url, "scheme", None)
+        if not host:
+            host = getattr(url, "netloc", None)
+
+    if scheme and host:
+        return f"{scheme}://{host}"
+
+    host_arg = getattr(args, "host", "127.0.0.1")
+    if host_arg in ("0.0.0.0", "::"):
+        host_arg = "127.0.0.1"
+    port_arg = getattr(args, "port", 7860)
+    return f"http://{host_arg}:{port_arg}"
+
+
 def _build_filename(state: Dict[str, Any]) -> str:
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     pid = re.sub(r"[^a-zA-Z0-9_-]", "_", state["participant_id"]) or "participant"
     return f"{pid}_{state['task']}_{state['mode']}_{ts}.json"
+
+
+def _session_label(state: Dict[str, Any]) -> str:
+    name = (state.get("participant_name") or state.get("participant_id") or "").strip()
+    if not name:
+        name = "participant"
+    task = str(state.get("task", "")).strip()
+    setup = str(state.get("setup", "")).strip()
+    return f"{name} | {task} | {setup}"
+
+
+def _encode_image_data_url(image_path: str) -> Optional[str]:
+    if not image_path or not os.path.exists(image_path):
+        return None
+    try:
+        with open(image_path, "rb") as fh:
+            raw = fh.read()
+        ext = os.path.splitext(image_path)[1].lower()
+        if ext in [".jpg", ".jpeg"]:
+            mime = "image/jpeg"
+        elif ext == ".gif":
+            mime = "image/gif"
+        elif ext == ".webp":
+            mime = "image/webp"
+        else:
+            mime = "image/png"
+        encoded = base64.b64encode(raw).decode("utf-8")
+        return f"data:{mime};base64,{encoded}"
+    except Exception:
+        return None
+
+
+def _render_move_history(state: Dict[str, Any]) -> str:
+    entries = state.get("move_history") or []
+    if not entries:
+        return ""
+
+    blocks: List[str] = []
+    for idx, entry in enumerate(entries, start=1):
+        answer = html.escape(str(entry.get("answer", "")))
+        feedback = html.escape(str(entry.get("feedback", "")))
+        ts = html.escape(str(entry.get("timestamp", "")))
+        image_data_url = entry.get("image_data_url")
+        image_path = entry.get("image_path")
+        image_html = ""
+        if image_data_url:
+            image_html = (
+                f"<div style='margin-top:6px;'><img src='{image_data_url}' "
+                "style='max-width:100%; border-radius:6px;'></div>"
+            )
+        elif image_path and os.path.exists(image_path):
+            image_url = "/gradio_api/file=" + quote(str(image_path), safe="/")
+            image_html = (
+                f"<div style='margin-top:6px;'><img src='{image_url}' "
+                "style='max-width:100%; border-radius:6px;'></div>"
+            )
+        blocks.append(
+            "<div style='padding:10px; border:1px solid #ccc; border-radius:8px; margin-bottom:8px;'>"
+            f"<div><strong>Move {idx}</strong> <span style='opacity:0.75;'>{ts}</span></div>"
+            f"<div><strong>User:</strong> {answer}</div>"
+            f"<div><strong>System:</strong> {feedback}</div>"
+            f"{image_html}</div>"
+        )
+    return "".join(blocks)
+
+
+def _snapshot_history_image(state: Dict[str, Any], image_path: Optional[str]) -> Optional[str]:
+    if not state.get("history_enabled"):
+        return None
+    if not image_path or not os.path.exists(image_path):
+        return None
+
+    session_dir = state.get("history_image_dir")
+    if not session_dir:
+        return None
+
+    os.makedirs(session_dir, exist_ok=True)
+    idx = len(state.get("move_history") or []) + 1
+    ext = os.path.splitext(str(image_path))[1] or ".png"
+    dst = os.path.join(session_dir, f"move_{idx:03d}{ext}")
+    try:
+        shutil.copy2(str(image_path), dst)
+        return dst
+    except Exception:
+        return None
+
+
+def _cleanup_session_images(state: Optional[Dict[str, Any]]) -> None:
+    if not state:
+        return
+    session_dir = state.get("history_image_dir")
+    if session_dir and os.path.isdir(session_dir):
+        try:
+            shutil.rmtree(session_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
+def _append_move_history(
+    state: Dict[str, Any], answer_text: str, feedback_text: str, image_path: Optional[str]
+) -> None:
+    if not state.get("history_enabled"):
+        return
+    entries = state.setdefault("move_history", [])
+    image_data_url = None
+    if image_path and os.path.exists(image_path):
+        image_data_url = _encode_image_data_url(image_path)
+
+    entries.append(
+        {
+            "answer": answer_text,
+            "feedback": feedback_text,
+            "image_path": image_path,
+            "image_data_url": image_data_url,
+            "timestamp": datetime.utcnow().strftime("%H:%M:%S"),
+        }
+    )
 
 
 def _persist_session(state: Dict[str, Any]) -> str:
@@ -159,7 +513,9 @@ def _persist_session(state: Dict[str, Any]) -> str:
 
 
 def _start_session(
+    participant_name: str,
     participant_id: str,
+    history_enabled: bool,
     task: str,
     setup: str,
     swm_boxes: int,
@@ -172,10 +528,15 @@ def _start_session(
     rapm_n_questions: int,
     output_dir: str,
 ) -> Tuple[Dict[str, Any], str, Optional[str], str, Dict[str, Any], str]:
+    participant_name = participant_name.strip() or "participant"
     participant_id = participant_id.strip() or "participant"
+    session_id = uuid.uuid4().hex
     env_mode, image_only = _resolve_mode(task, setup)
     state: Dict[str, Any] = {
+        "participant_name": participant_name,
         "participant_id": participant_id,
+        "session_id": session_id,
+        "history_enabled": bool(history_enabled),
         "task": task,
         "setup": setup,
         "mode": env_mode,
@@ -185,8 +546,13 @@ def _start_session(
         "turn_logs": [],
         "done": False,
         "prompt_shown_at": time.time(),
+        "history_image_dir": os.path.join(output_dir, ".session_images", session_id),
+        "move_history": [],
         "config": {
+            "participant_name": participant_name,
             "participant_id": participant_id,
+            "session_id": session_id,
+            "history_enabled": bool(history_enabled),
             "task": task,
             "setup": setup,
             "mode": env_mode,
@@ -466,7 +832,11 @@ You will be shown a given card and four option cards. Your task is to match the 
 """,
         "swm": """**Spatial Working Memory (SWM) Test**
 
-You will see a grid of closed boxes. Your task is to find token types hidden in boxes.
+Your task is to find token types hidden in boxes.
+
+Depending on the setup:
+- In **text** setup, you will see numbered boxes and answer with a box number.
+- In **image+text** or **image-only** setup, you will see a grid and answer with coordinates.
 
 **How it works:**
 1. There can be one or multiple token types, depending on the setup.
@@ -475,9 +845,9 @@ You will see a grid of closed boxes. Your task is to find token types hidden in 
 4. You must use feedback from previous choices to guide your next choice.
 
 **Answering:**
-- Enter the coordinates of a box to open it.
-- Coordinates are in format: row,col (e.g., "0,1" for row 0, column 1)
-- Rows and columns are **0-indexed** (starting from 0)
+- In **text** setup: enter a single box number (e.g., 3).
+- In **image+text/image-only** setup: enter coordinates in the format row,col (e.g., "0,1").
+- For coordinates, rows and columns are **0-indexed** (starting from 0).
 """,
         "rapm": """**Raven's Advanced Progressive Matrices (RAPM)**
 
@@ -504,13 +874,13 @@ def launch_human_benchmark(args: Any) -> None:
 
         with gr.Tabs() as tab_group:
             # ========== SETUP TAB ==========
-            with gr.Tab("Setup") as setup_tab:
+            with gr.Tab("Setup", id="setup") as setup_tab:
                 gr.Markdown("### Enter Your Information & Select Task")
 
                 with gr.Group():
-                    participant_id = gr.Textbox(
-                        label="Participant ID",
-                        placeholder="e.g., P001 or your name",
+                    participant_name = gr.Textbox(
+                        label="Participant Name",
+                        placeholder="e.g., faiz",
                         value="participant",
                     )
 
@@ -524,6 +894,7 @@ def launch_human_benchmark(args: Any) -> None:
                         choices=["text", "image+text"],
                         value="text",
                         label="Setup Type",
+                        allow_custom_value=True,
                     )
 
                 # Task-specific public settings
@@ -596,6 +967,13 @@ def launch_human_benchmark(args: Any) -> None:
                     value=False, label="Show Researcher Settings", interactive=True
                 )
 
+                history_enabled_toggle = gr.Checkbox(
+                    value=False,
+                    label="Enable Move History Panel",
+                    info="If enabled, participants can view their past moves and feedback during the test.",
+                    interactive=True,
+                )
+
                 # Task description
                 task_description = gr.Markdown(_task_instructions("wcst"))
 
@@ -609,7 +987,9 @@ def launch_human_benchmark(args: Any) -> None:
                 # Visibility logic for task-specific groups and setup choices.
                 def update_task_controls(t, show_researcher):
                     if t == "wcst":
-                        setup = gr.update(choices=["text", "image+text"], value="text")
+                        setup = gr.update(
+                            choices=TASK_SETUP_CHOICES["wcst"], value="text"
+                        )
                         researcher_panel = gr.update(visible=show_researcher)
                         wcst_task = gr.update(visible=True)
                         swm_task = gr.update(visible=False)
@@ -618,9 +998,7 @@ def launch_human_benchmark(args: Any) -> None:
                         swm_research = gr.update(visible=False)
                         rapm_research = gr.update(visible=False)
                     elif t == "swm":
-                        setup = gr.update(
-                            choices=["text", "image+text", "image-only"], value="text"
-                        )
+                        setup = gr.update(choices=TASK_SETUP_CHOICES["swm"], value="text")
                         researcher_panel = gr.update(visible=show_researcher)
                         wcst_task = gr.update(visible=False)
                         swm_task = gr.update(visible=True)
@@ -629,7 +1007,7 @@ def launch_human_benchmark(args: Any) -> None:
                         swm_research = gr.update(visible=show_researcher)
                         rapm_research = gr.update(visible=False)
                     else:
-                        setup = gr.update(choices=["text", "image"], value="text")
+                        setup = gr.update(choices=TASK_SETUP_CHOICES["rapm"], value="text")
                         researcher_panel = gr.update(visible=False)
                         wcst_task = gr.update(visible=False)
                         swm_task = gr.update(visible=False)
@@ -703,10 +1081,21 @@ def launch_human_benchmark(args: Any) -> None:
                     label="Status", interactive=False, value="Ready"
                 )
 
+                generate_link_btn = gr.Button(
+                    "Generate Participant Link", variant="secondary"
+                )
+                participant_link_box = gr.Textbox(
+                    label="Participant Link",
+                    interactive=False,
+                    visible=False,
+                    placeholder="Generate link after setting task and options.",
+                )
+
                 def start_task(
-                    pid,
+                    name,
                     tsk,
                     setup,
+                    history_enabled,
                     swm_boxes,
                     swm_tokens,
                     wcst_var,
@@ -718,8 +1107,25 @@ def launch_human_benchmark(args: Any) -> None:
                     out_dir,
                 ):
                     try:
+                        setup = _normalize_setup_for_task(tsk, setup)
+                        resolved_name, resolved_id = _generate_participant_identity(
+                            participant_name=name,
+                            task=tsk,
+                            setup=setup,
+                            swm_boxes=swm_boxes,
+                            swm_tokens=swm_tokens,
+                            wcst_variant=wcst_var,
+                            wcst_max_trials=wcst_max,
+                            wcst_num_correct=wcst_num,
+                            wcst_bg_color=wcst_bg,
+                            wcst_ambiguous=wcst_amb,
+                            rapm_n_questions=rapm_n_questions,
+                            output_dir=out_dir,
+                        )
                         st, obs, img, fb, met, stat = _start_session(
-                            pid,
+                            resolved_name,
+                            resolved_id,
+                            history_enabled,
                             tsk,
                             setup,
                             swm_boxes,
@@ -741,11 +1147,63 @@ def launch_human_benchmark(args: Any) -> None:
                     except Exception as e:
                         return {}, f"Error: {str(e)}"
 
+                def generate_participant_link(
+                    name,
+                    tsk,
+                    setup,
+                    history_enabled,
+                    swm_boxes,
+                    swm_tokens,
+                    wcst_var,
+                    wcst_max,
+                    wcst_num,
+                    wcst_bg,
+                    wcst_amb,
+                    rapm_n_questions,
+                    out_dir,
+                    request: gr.Request,
+                ):
+                    setup = _normalize_setup_for_task(tsk, setup)
+                    resolved_name, resolved_id = _generate_participant_identity(
+                        participant_name=name,
+                        task=tsk,
+                        setup=setup,
+                        swm_boxes=swm_boxes,
+                        swm_tokens=swm_tokens,
+                        wcst_variant=wcst_var,
+                        wcst_max_trials=wcst_max,
+                        wcst_num_correct=wcst_num,
+                        wcst_bg_color=wcst_bg,
+                        wcst_ambiguous=wcst_amb,
+                        rapm_n_questions=rapm_n_questions,
+                        output_dir=out_dir,
+                    )
+                    cfg = _build_preset_config(
+                        participant_name=resolved_name,
+                        participant_id=resolved_id,
+                        history_enabled=history_enabled,
+                        task=tsk,
+                        setup=setup,
+                        swm_boxes=swm_boxes,
+                        swm_tokens=swm_tokens,
+                        wcst_variant=wcst_var,
+                        wcst_max_trials=wcst_max,
+                        wcst_num_correct=wcst_num,
+                        wcst_bg_color=wcst_bg,
+                        wcst_ambiguous=wcst_amb,
+                        rapm_n_questions=rapm_n_questions,
+                    )
+                    token = _register_preset(cfg)
+                    origin = _infer_request_origin(request, args)
+                    link = f"{origin}/?mode={PARTICIPANT_MODE}&token={token}"
+                    return gr.update(value=link, visible=True)
+
                 start_btn = gr.Button("Start Test", variant="primary", size="lg")
                 start_inputs = [
-                    participant_id,
+                    participant_name,
                     task,
                     setup_type,
+                    history_enabled_toggle,
                     swm_boxes_setup,
                     swm_tokens_adv,
                     wcst_variant_setup,
@@ -757,8 +1215,29 @@ def launch_human_benchmark(args: Any) -> None:
                     output_dir_state,
                 ]
 
+                generate_link_btn.click(
+                    fn=generate_participant_link,
+                    inputs=[
+                        participant_name,
+                        task,
+                        setup_type,
+                        history_enabled_toggle,
+                        swm_boxes_setup,
+                        swm_tokens_adv,
+                        wcst_variant_setup,
+                        wcst_max_trials_adv,
+                        wcst_num_correct_adv,
+                        wcst_bg_color_adv,
+                        wcst_ambiguous_adv,
+                        rapm_n_questions_setup,
+                        output_dir_state,
+                    ],
+                    outputs=[participant_link_box],
+                    queue=False,
+                )
+
             # ========== TEST TAB ==========
-            with gr.Tab("Test") as test_tab:
+            with gr.Tab("Test", id="test") as test_tab:
                 gr.Markdown("### Complete the Task")
 
                 session_info = gr.Textbox(label="Session", interactive=False, value="")
@@ -767,7 +1246,7 @@ def launch_human_benchmark(args: Any) -> None:
                     label="Prompt", lines=8, interactive=False, value=""
                 )
                 stimulus_image = gr.Image(
-                    label="Image", type="filepath", interactive=False, height=800
+                    label="Image", type="filepath", interactive=False
                 )
 
                 answer = gr.Textbox(
@@ -783,35 +1262,42 @@ def launch_human_benchmark(args: Any) -> None:
                     )
                     stop_btn = gr.Button("End Session")
 
-                feedback = gr.Textbox(label="Feedback", interactive=False, value="")
-                metrics = gr.JSON(label="Progress")
+                feedback = gr.Textbox(
+                    label="Feedback", interactive=False, value="", visible=False
+                )
+                metrics = gr.JSON(label="Progress", visible=False)
+                move_history_panel = gr.HTML(value="", visible=False)
                 status = gr.Textbox(label="Status", interactive=False, value="Idle")
+
+                def _history_panel_update(state):
+                    if not state or not state.get("history_enabled"):
+                        return gr.update(value="", visible=False)
+                    return gr.update(value=_render_move_history(state), visible=True)
 
                 def on_submit(ans, state):
                     if not state or state.get("done"):
-                        return state or {}, "", None, "", {}, "Idle", ""
+                        return (
+                            state or {},
+                            "",
+                            None,
+                            gr.update(value="", visible=False),
+                            gr.update(value={}, visible=False),
+                            "Idle",
+                            gr.update(value="", visible=False),
+                            "",
+                        )
 
                     if not (ans or "").strip():
                         current_obs = state.get("_current_observation", "")
                         current_img = state.get("_current_image")
-                        if state.get("task") == "rapm":
-                            current_metrics = _rapm_metrics(state)
-                        else:
-                            env = state.get("env")
-                            current_metrics = (
-                                _format_metrics_for_task(
-                                    state.get("task", ""), env.get_metrics()
-                                )
-                                if env
-                                else {}
-                            )
                         return (
                             state,
                             current_obs,
                             current_img,
-                            "Please enter an answer before submitting.",
-                            current_metrics,
+                            gr.update(value="", visible=False),
+                            gr.update(value={}, visible=False),
                             "Running",
+                            _history_panel_update(state),
                             "",
                         )
 
@@ -821,15 +1307,43 @@ def launch_human_benchmark(args: Any) -> None:
                         time.time() - float(state.get("prompt_shown_at", time.time())),
                     )
                     task_name = state.get("task", "")
+                    current_image_before_step = state.get("_current_image")
 
                     if task_name == "rapm":
                         obs, img, fb, met, stat = _step_rapm(state, wrapped, dt)
+                        _append_move_history(
+                            state,
+                            answer_text=(ans or "").strip(),
+                            feedback_text=fb,
+                            image_path=_snapshot_history_image(
+                                state, current_image_before_step
+                            ),
+                        )
                         state["_current_observation"] = obs
                         state["_current_image"] = img
                         if state.get("done"):
-                            return state, "", img, fb, met, "Completed", ""
+                            _cleanup_session_images(state)
+                            return (
+                                state,
+                                "",
+                                img,
+                                gr.update(value="", visible=False),
+                                gr.update(value=met, visible=False),
+                                "Completed",
+                                _history_panel_update(state),
+                                "",
+                            )
                         state["prompt_shown_at"] = time.time()
-                        return state, obs, img, fb, met, stat, ""
+                        return (
+                            state,
+                            obs,
+                            img,
+                            gr.update(value="", visible=False),
+                            gr.update(value=met, visible=False),
+                            stat,
+                            _history_panel_update(state),
+                            "",
+                        )
                     else:
                         env = state.get("env")
                         if not env:
@@ -837,10 +1351,17 @@ def launch_human_benchmark(args: Any) -> None:
                                 state,
                                 "",
                                 None,
-                                "No environment loaded",
-                                {},
+                                gr.update(value="", visible=False),
+                                gr.update(value={}, visible=False),
                                 "Error",
+                                _history_panel_update(state),
                                 "",
+                            )
+
+                        wcst_pre_step_history_image = None
+                        if task_name == "wcst":
+                            wcst_pre_step_history_image = _snapshot_history_image(
+                                state, current_image_before_step
                             )
 
                         step = env.step(wrapped)
@@ -851,7 +1372,30 @@ def launch_human_benchmark(args: Any) -> None:
                         )
                         met = env.get_metrics()
                         met = _format_metrics_for_task(task_name, met)
-                        fb = f"Reward: {step.reward}"
+                        obs_feedback = _clean_observation(step.observation)
+                        if obs_feedback:
+                            fb = obs_feedback
+                        else:
+                            status_txt = str(step.info.get("status") or "").strip()
+                            fb = status_txt or "Result recorded."
+
+                        # WCST history should reflect the pre-step card, while
+                        # SWM history should reflect the post-step board state.
+                        if task_name == "swm":
+                            history_image_path = _snapshot_history_image(state, image_path)
+                        elif task_name == "wcst":
+                            history_image_path = wcst_pre_step_history_image
+                        else:
+                            history_image_path = _snapshot_history_image(
+                                state, current_image_before_step
+                            )
+
+                        _append_move_history(
+                            state,
+                            answer_text=(ans or "").strip(),
+                            feedback_text=fb,
+                            image_path=history_image_path,
+                        )
 
                         state["turn_logs"].append(
                             {
@@ -870,13 +1414,15 @@ def launch_human_benchmark(args: Any) -> None:
                             out_path = _persist_session(state)
                             state["_current_observation"] = ""
                             state["_current_image"] = image_path
+                            _cleanup_session_images(state)
                             return (
                                 state,
                                 "",
                                 image_path,
-                                f"{fb}. Results saved: {out_path}",
-                                met,
+                                gr.update(value="", visible=False),
+                                gr.update(value=met, visible=False),
                                 "Completed",
+                                _history_panel_update(state),
                                 "",
                             )
 
@@ -888,7 +1434,16 @@ def launch_human_benchmark(args: Any) -> None:
                         )
                         state["_current_observation"] = next_obs
                         state["_current_image"] = image_path
-                        return state, next_obs, image_path, fb, met, "Running", ""
+                        return (
+                            state,
+                            next_obs,
+                            image_path,
+                            gr.update(value="", visible=False),
+                            gr.update(value=met, visible=False),
+                            "Running",
+                            _history_panel_update(state),
+                            "",
+                        )
 
                 submit_btn.click(
                     fn=on_submit,
@@ -900,6 +1455,7 @@ def launch_human_benchmark(args: Any) -> None:
                         feedback,
                         metrics,
                         status,
+                        move_history_panel,
                         answer,
                     ],
                     queue=False,
@@ -914,6 +1470,7 @@ def launch_human_benchmark(args: Any) -> None:
                         feedback,
                         metrics,
                         status,
+                        move_history_panel,
                         answer,
                     ],
                     queue=False,
@@ -921,14 +1478,31 @@ def launch_human_benchmark(args: Any) -> None:
 
                 def on_end(state):
                     if not state or not state.get("participant_id"):
-                        return {}, "", None, "No active session.", {}, "Idle"
+                        return (
+                            {},
+                            "",
+                            None,
+                            gr.update(value="", visible=False),
+                            gr.update(value={}, visible=False),
+                            "Idle",
+                            gr.update(value="", visible=False),
+                        )
                     if not state.get("done") and state.get("turn_logs"):
                         out_path = _persist_session(state)
                         status_msg = f"Session saved: {out_path}"
                     else:
                         status_msg = "Session closed."
                     state["done"] = True
-                    return state, "", None, status_msg, {}, "Idle"
+                    _cleanup_session_images(state)
+                    return (
+                        state,
+                        "",
+                        None,
+                        gr.update(value="", visible=False),
+                        gr.update(value={}, visible=False),
+                        "Idle",
+                        _history_panel_update(state),
+                    )
 
                 stop_btn.click(
                     fn=on_end,
@@ -940,6 +1514,7 @@ def launch_human_benchmark(args: Any) -> None:
                         feedback,
                         metrics,
                         status,
+                        move_history_panel,
                     ],
                     queue=False,
                 )
@@ -947,9 +1522,17 @@ def launch_human_benchmark(args: Any) -> None:
                 # Sync session state on load/change
                 def sync_session(state):
                     if not state or not state.get("participant_id"):
-                        return "", "", None, "", {}, "Idle"
+                        return (
+                            "",
+                            "",
+                            None,
+                            gr.update(value="", visible=False),
+                            gr.update(value={}, visible=False),
+                            "Idle",
+                            gr.update(value="", visible=False),
+                        )
 
-                    info = f"{state['participant_id']} | {state['task']} | {state.get('setup', '')}"
+                    info = _session_label(state)
                     obs = state.get(
                         "_current_observation", state.get("_initial_observation", "")
                     )
@@ -965,8 +1548,15 @@ def launch_human_benchmark(args: Any) -> None:
                             if env
                             else {}
                         )
-                    fb = "Session started. Submit your answer."
-                    return info, obs, img, fb, current_metrics, "Running"
+                    return (
+                        info,
+                        obs,
+                        img,
+                        gr.update(value="", visible=False),
+                        gr.update(value=current_metrics, visible=False),
+                        "Running",
+                        _history_panel_update(state),
+                    )
 
                 start_btn.click(
                     fn=start_task,
@@ -983,6 +1573,7 @@ def launch_human_benchmark(args: Any) -> None:
                         feedback,
                         metrics,
                         status,
+                        move_history_panel,
                     ],
                     queue=False,
                 )
@@ -997,6 +1588,185 @@ def launch_human_benchmark(args: Any) -> None:
                         feedback,
                         metrics,
                         status,
+                        move_history_panel,
+                    ],
+                    queue=False,
+                )
+
+                def initialize_from_link(out_dir, request: gr.Request):
+                    params = _extract_query_params(request)
+                    mode = (params.get("mode") or "").strip().lower()
+                    token = (params.get("token") or "").strip()
+
+                    # Default: researcher mode, no auto-start.
+                    if mode != PARTICIPANT_MODE:
+                        return (
+                            {},
+                            "Ready",
+                            "",
+                            "",
+                            None,
+                            gr.update(value="", visible=False),
+                            gr.update(value={}, visible=False),
+                            "Idle",
+                            gr.update(interactive=True),
+                            gr.update(interactive=True),
+                            gr.update(interactive=True),
+                            gr.update(value=False, interactive=True),
+                            gr.update(interactive=True),
+                            gr.update(interactive=True),
+                            gr.update(interactive=True),
+                            gr.update(value=False, visible=True, interactive=True),
+                            gr.update(visible=False),
+                            gr.update(visible=True, interactive=True),
+                            gr.update(visible=True, interactive=True),
+                            gr.update(visible=False),
+                            gr.update(value="", visible=False),
+                            gr.update(),
+                            gr.update(selected="setup"),
+                        )
+
+                    cfg = _get_preset(token)
+                    if cfg is None:
+                        msg = "Invalid participant link. Ask the researcher for a new link."
+                        return (
+                            {},
+                            "Participant mode (invalid link)",
+                            "",
+                            "",
+                            None,
+                            gr.update(value="", visible=False),
+                            gr.update(value={}, visible=False),
+                            "Error",
+                            gr.update(interactive=False),
+                            gr.update(interactive=False),
+                            gr.update(interactive=False),
+                            gr.update(value=False, interactive=False),
+                            gr.update(interactive=False),
+                            gr.update(interactive=False),
+                            gr.update(interactive=False),
+                            gr.update(visible=False, interactive=False),
+                            gr.update(visible=False),
+                            gr.update(visible=False, interactive=False),
+                            gr.update(visible=False, interactive=False),
+                            gr.update(visible=False),
+                            gr.update(value="", visible=False),
+                            gr.update(),
+                            gr.update(selected="setup"),
+                        )
+
+                    st, obs, img, _fb, met, stat = _start_session(
+                        cfg.get("participant_name", cfg["participant_id"]),
+                        cfg["participant_id"],
+                        cfg.get("history_enabled", False),
+                        cfg["task"],
+                        cfg["setup"],
+                        cfg["swm_boxes"],
+                        cfg["swm_tokens"],
+                        cfg["wcst_variant"],
+                        cfg["wcst_max_trials"],
+                        cfg["wcst_num_correct"],
+                        cfg["wcst_bg_color"],
+                        cfg["wcst_ambiguous"],
+                        cfg["rapm_n_questions"],
+                        out_dir,
+                    )
+
+                    st["_initial_observation"] = obs
+                    st["_initial_image"] = img
+                    st["_current_observation"] = obs
+                    st["_current_image"] = img
+
+                    if stat != "Running":
+                        return (
+                            st,
+                            "Participant mode (failed to start)",
+                            "",
+                            "",
+                            None,
+                            gr.update(value="", visible=False),
+                            gr.update(value=met, visible=False),
+                            "Error",
+                            gr.update(interactive=False),
+                            gr.update(interactive=False),
+                            gr.update(interactive=False),
+                            gr.update(
+                                value=cfg.get("history_enabled", False),
+                                interactive=False,
+                            ),
+                            gr.update(interactive=False),
+                            gr.update(interactive=False),
+                            gr.update(interactive=False),
+                            gr.update(visible=False, interactive=False),
+                            gr.update(visible=False),
+                            gr.update(visible=False, interactive=False),
+                            gr.update(visible=False, interactive=False),
+                            gr.update(visible=False),
+                            _history_panel_update(st),
+                            gr.update(value=_task_instructions(cfg["task"])),
+                            gr.update(selected="setup"),
+                        )
+
+                    info = _session_label(st)
+                    return (
+                        st,
+                        "Participant mode (locked)",
+                        info,
+                        obs,
+                        img,
+                        gr.update(value="", visible=False),
+                        gr.update(value=met, visible=False),
+                        "Running",
+                        gr.update(
+                            value=cfg.get("participant_name", cfg["participant_id"]),
+                            interactive=False,
+                        ),
+                        gr.update(value=cfg["task"], interactive=False),
+                        gr.update(value=cfg["setup"], interactive=False),
+                        gr.update(
+                            value=cfg.get("history_enabled", False),
+                            interactive=False,
+                        ),
+                        gr.update(value=cfg["swm_boxes"], interactive=False),
+                        gr.update(value=cfg["wcst_variant"], interactive=False),
+                        gr.update(value=cfg["rapm_n_questions"], interactive=False),
+                        gr.update(visible=False, interactive=False),
+                        gr.update(visible=False),
+                        gr.update(visible=False, interactive=False),
+                        gr.update(visible=False, interactive=False),
+                        gr.update(visible=False),
+                        _history_panel_update(st),
+                        gr.update(value=_task_instructions(cfg["task"])),
+                        gr.update(selected="test"),
+                    )
+
+                demo.load(
+                    fn=initialize_from_link,
+                    inputs=[output_dir_state],
+                    outputs=[
+                        session_state,
+                        status_setup,
+                        session_info,
+                        observation,
+                        stimulus_image,
+                        feedback,
+                        metrics,
+                        status,
+                        participant_name,
+                        task,
+                        setup_type,
+                        history_enabled_toggle,
+                        swm_boxes_setup,
+                        wcst_variant_setup,
+                        rapm_n_questions_setup,
+                        researcher_toggle,
+                        researcher_group,
+                        start_btn,
+                        generate_link_btn,
+                        participant_link_box,
+                        move_history_panel,
+                        task_description,
+                        tab_group,
                     ],
                     queue=False,
                 )
