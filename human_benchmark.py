@@ -2,15 +2,16 @@
 """Human-facing benchmark runner built on top of existing task logic."""
 
 import json
+import logging
 import os
 import re
 import secrets
 import shutil
 import sys
+import tempfile
 import time
 import html
 import uuid
-import base64
 from dataclasses import dataclass
 from datetime import datetime
 from types import SimpleNamespace
@@ -34,6 +35,8 @@ RAPM_IMAGE_DATA_PATH = os.path.join("eval_data", "raven_subset.json")
 RAPM_MAX_TEXT_QUESTIONS = 200
 RAPM_MAX_IMAGE_QUESTIONS = 140
 PARTICIPANT_MODE = "participant"
+MAX_MOVE_HISTORY_ENTRIES = 120
+MOVE_HISTORY_RENDER_LIMIT = 60
 TASK_SETUP_CHOICES: Dict[str, List[str]] = {
     "wcst": ["text", "image+text"],
     "swm": ["text", "image+text", "image-only"],
@@ -43,6 +46,35 @@ TASK_SETUP_CHOICES: Dict[str, List[str]] = {
 # Tokenized preset configs for participant links (lives while app process runs).
 PRESET_STORE: Dict[str, Dict[str, Any]] = {}
 RUN_COUNTERS: Dict[str, int] = {}
+LOGGER = logging.getLogger("human_benchmark")
+
+
+def _configure_logging(output_dir: str) -> None:
+    if LOGGER.handlers:
+        return
+    os.makedirs(output_dir, exist_ok=True)
+    log_path = os.path.join(output_dir, "human_benchmark_debug.log")
+    formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
+
+    handler = logging.FileHandler(log_path, encoding="utf-8")
+    handler.setFormatter(formatter)
+
+    stream_handler = logging.StreamHandler(sys.stderr)
+    stream_handler.setFormatter(formatter)
+
+    LOGGER.setLevel(logging.INFO)
+    LOGGER.addHandler(handler)
+    LOGGER.addHandler(stream_handler)
+    LOGGER.propagate = False
+    LOGGER.info("Logging initialized | path=%s", log_path)
+
+
+def _history_image_root() -> str:
+    # Keep history snapshots under Gradio temp root so file serving is permitted.
+    base = os.environ.get("GRADIO_TEMP_DIR")
+    if not base:
+        base = os.path.join(tempfile.gettempdir(), "gradio")
+    return os.path.join(base, "human_history")
 
 
 def _slugify_token(value: str) -> str:
@@ -375,46 +407,30 @@ def _session_label(state: Dict[str, Any]) -> str:
     return f"{name} | {task} | {setup}"
 
 
-def _encode_image_data_url(image_path: str) -> Optional[str]:
-    if not image_path or not os.path.exists(image_path):
-        return None
-    try:
-        with open(image_path, "rb") as fh:
-            raw = fh.read()
-        ext = os.path.splitext(image_path)[1].lower()
-        if ext in [".jpg", ".jpeg"]:
-            mime = "image/jpeg"
-        elif ext == ".gif":
-            mime = "image/gif"
-        elif ext == ".webp":
-            mime = "image/webp"
-        else:
-            mime = "image/png"
-        encoded = base64.b64encode(raw).decode("utf-8")
-        return f"data:{mime};base64,{encoded}"
-    except Exception:
-        return None
-
-
 def _render_move_history(state: Dict[str, Any]) -> str:
     entries = state.get("move_history") or []
     if not entries:
         return ""
 
+    truncated = len(entries) > MOVE_HISTORY_RENDER_LIMIT
+    start_idx = max(0, len(entries) - MOVE_HISTORY_RENDER_LIMIT)
+    visible_entries = entries[start_idx:]
+
     blocks: List[str] = []
-    for idx, entry in enumerate(entries, start=1):
+    if truncated:
+        blocks.append(
+            "<div style='padding:8px; margin-bottom:8px; background:#fff7df; border:1px solid #f0d999; border-radius:8px;'>"
+            f"Showing the latest {MOVE_HISTORY_RENDER_LIMIT} moves out of {len(entries)} total."
+            "</div>"
+        )
+
+    for idx, entry in enumerate(visible_entries, start=start_idx + 1):
         answer = html.escape(str(entry.get("answer", "")))
         feedback = html.escape(str(entry.get("feedback", "")))
         ts = html.escape(str(entry.get("timestamp", "")))
-        image_data_url = entry.get("image_data_url")
         image_path = entry.get("image_path")
         image_html = ""
-        if image_data_url:
-            image_html = (
-                f"<div style='margin-top:6px;'><img src='{image_data_url}' "
-                "style='max-width:100%; border-radius:6px;'></div>"
-            )
-        elif image_path and os.path.exists(image_path):
+        if image_path and os.path.exists(image_path):
             image_url = "/gradio_api/file=" + quote(str(image_path), safe="/")
             image_html = (
                 f"<div style='margin-top:6px;'><img src='{image_url}' "
@@ -441,13 +457,15 @@ def _snapshot_history_image(state: Dict[str, Any], image_path: Optional[str]) ->
         return None
 
     os.makedirs(session_dir, exist_ok=True)
-    idx = len(state.get("move_history") or []) + 1
+    idx = int(state.get("history_seq", 0)) + 1
+    state["history_seq"] = idx
     ext = os.path.splitext(str(image_path))[1] or ".png"
-    dst = os.path.join(session_dir, f"move_{idx:03d}{ext}")
+    dst = os.path.join(session_dir, f"move_{idx:05d}{ext}")
     try:
         shutil.copy2(str(image_path), dst)
         return dst
     except Exception:
+        LOGGER.exception("Failed to snapshot history image: %s", image_path)
         return None
 
 
@@ -468,19 +486,24 @@ def _append_move_history(
     if not state.get("history_enabled"):
         return
     entries = state.setdefault("move_history", [])
-    image_data_url = None
-    if image_path and os.path.exists(image_path):
-        image_data_url = _encode_image_data_url(image_path)
 
     entries.append(
         {
             "answer": answer_text,
             "feedback": feedback_text,
             "image_path": image_path,
-            "image_data_url": image_data_url,
             "timestamp": datetime.utcnow().strftime("%H:%M:%S"),
         }
     )
+
+    while len(entries) > MAX_MOVE_HISTORY_ENTRIES:
+        dropped = entries.pop(0)
+        dropped_image = dropped.get("image_path")
+        if dropped_image and os.path.exists(dropped_image):
+            try:
+                os.remove(dropped_image)
+            except Exception:
+                LOGGER.exception("Failed to delete pruned history image: %s", dropped_image)
 
 
 def _persist_session(state: Dict[str, Any]) -> str:
@@ -537,6 +560,7 @@ def _start_session(
         "participant_id": participant_id,
         "session_id": session_id,
         "history_enabled": bool(history_enabled),
+        "history_seq": 0,
         "task": task,
         "setup": setup,
         "mode": env_mode,
@@ -546,7 +570,7 @@ def _start_session(
         "turn_logs": [],
         "done": False,
         "prompt_shown_at": time.time(),
-        "history_image_dir": os.path.join(output_dir, ".session_images", session_id),
+        "history_image_dir": os.path.join(_history_image_root(), session_id),
         "move_history": [],
         "config": {
             "participant_name": participant_name,
@@ -866,6 +890,8 @@ Your task is to find the pattern and select the correct option that completes th
 
 def launch_human_benchmark(args: Any) -> None:
     import gradio as gr
+
+    _configure_logging(getattr(args, "output_dir", "human_data"))
 
     with gr.Blocks(title="NeuroCognition Human Benchmark") as demo:
         gr.Markdown("# NeuroCognition Human Benchmark")
@@ -1272,176 +1298,279 @@ def launch_human_benchmark(args: Any) -> None:
                 def _history_panel_update(state):
                     if not state or not state.get("history_enabled"):
                         return gr.update(value="", visible=False)
-                    return gr.update(value=_render_move_history(state), visible=True)
+                    try:
+                        return gr.update(value=_render_move_history(state), visible=True)
+                    except Exception:
+                        LOGGER.exception(
+                            "Failed to render move history | participant_id=%s | session_id=%s",
+                            (state or {}).get("participant_id"),
+                            (state or {}).get("session_id"),
+                        )
+                        return gr.update(value="", visible=False)
 
                 def on_submit(ans, state):
-                    if not state or state.get("done"):
-                        return (
-                            state or {},
-                            "",
-                            None,
-                            gr.update(value="", visible=False),
-                            gr.update(value={}, visible=False),
-                            "Idle",
-                            gr.update(value="", visible=False),
-                            "",
-                        )
-
-                    if not (ans or "").strip():
-                        current_obs = state.get("_current_observation", "")
-                        current_img = state.get("_current_image")
-                        return (
-                            state,
-                            current_obs,
-                            current_img,
-                            gr.update(value="", visible=False),
-                            gr.update(value={}, visible=False),
-                            "Running",
-                            _history_panel_update(state),
-                            "",
-                        )
-
-                    wrapped = _wrap_answer(ans)
-                    dt = max(
-                        0.0,
-                        time.time() - float(state.get("prompt_shown_at", time.time())),
-                    )
-                    task_name = state.get("task", "")
-                    current_image_before_step = state.get("_current_image")
-
-                    if task_name == "rapm":
-                        obs, img, fb, met, stat = _step_rapm(state, wrapped, dt)
-                        _append_move_history(
-                            state,
-                            answer_text=(ans or "").strip(),
-                            feedback_text=fb,
-                            image_path=_snapshot_history_image(
-                                state, current_image_before_step
-                            ),
-                        )
-                        state["_current_observation"] = obs
-                        state["_current_image"] = img
-                        if state.get("done"):
-                            _cleanup_session_images(state)
+                    try:
+                        if not state or state.get("done"):
                             return (
-                                state,
-                                "",
-                                img,
-                                gr.update(value="", visible=False),
-                                gr.update(value=met, visible=False),
-                                "Completed",
-                                _history_panel_update(state),
-                                "",
-                            )
-                        state["prompt_shown_at"] = time.time()
-                        return (
-                            state,
-                            obs,
-                            img,
-                            gr.update(value="", visible=False),
-                            gr.update(value=met, visible=False),
-                            stat,
-                            _history_panel_update(state),
-                            "",
-                        )
-                    else:
-                        env = state.get("env")
-                        if not env:
-                            return (
-                                state,
+                                state or {},
                                 "",
                                 None,
                                 gr.update(value="", visible=False),
                                 gr.update(value={}, visible=False),
-                                "Error",
+                                "Idle",
+                                gr.update(value="", visible=False),
+                                "",
+                            )
+
+                        if not (ans or "").strip():
+                            current_obs = state.get("_current_observation", "")
+                            current_img = state.get("_current_image")
+                            return (
+                                state,
+                                current_obs,
+                                current_img,
+                                gr.update(value="", visible=False),
+                                gr.update(value={}, visible=False),
+                                "Running",
                                 _history_panel_update(state),
                                 "",
                             )
 
-                        wcst_pre_step_history_image = None
-                        if task_name == "wcst":
-                            wcst_pre_step_history_image = _snapshot_history_image(
-                                state, current_image_before_step
+                        wrapped = _wrap_answer(ans)
+                        dt = max(
+                            0.0,
+                            time.time() - float(state.get("prompt_shown_at", time.time())),
+                        )
+                        task_name = state.get("task", "")
+                        current_image_before_step = state.get("_current_image")
+
+                        LOGGER.info(
+                            "submit_start | participant_id=%s | session_id=%s | task=%s | setup=%s | history_enabled=%s | turn_logs=%d | answer=%r",
+                            state.get("participant_id"),
+                            state.get("session_id"),
+                            task_name,
+                            state.get("setup"),
+                            state.get("history_enabled"),
+                            len(state.get("turn_logs") or []),
+                            (ans or "").strip(),
+                        )
+
+                        if task_name == "rapm":
+                            try:
+                                obs, img, fb, met, stat = _step_rapm(state, wrapped, dt)
+                            except Exception:
+                                LOGGER.exception(
+                                    "Submit failed in RAPM | participant_id=%s | task=%s | setup=%s",
+                                    state.get("participant_id"),
+                                    task_name,
+                                    state.get("setup"),
+                                )
+                                return (
+                                    state,
+                                    state.get("_current_observation", ""),
+                                    state.get("_current_image"),
+                                    gr.update(value="", visible=False),
+                                    gr.update(value={}, visible=False),
+                                    "Error",
+                                    _history_panel_update(state),
+                                    "",
+                                )
+                            _append_move_history(
+                                state,
+                                answer_text=(ans or "").strip(),
+                                feedback_text=fb,
+                                image_path=_snapshot_history_image(
+                                    state, current_image_before_step
+                                ),
                             )
-
-                        step = env.step(wrapped)
-                        image_path = (
-                            env.get_current_image_path()
-                            if state.get("mode") == "image"
-                            else None
-                        )
-                        met = env.get_metrics()
-                        met = _format_metrics_for_task(task_name, met)
-                        obs_feedback = _clean_observation(step.observation)
-                        if obs_feedback:
-                            fb = obs_feedback
-                        else:
-                            status_txt = str(step.info.get("status") or "").strip()
-                            fb = status_txt or "Result recorded."
-
-                        # WCST history should reflect the pre-step card, while
-                        # SWM history should reflect the post-step board state.
-                        if task_name == "swm":
-                            history_image_path = _snapshot_history_image(state, image_path)
-                        elif task_name == "wcst":
-                            history_image_path = wcst_pre_step_history_image
-                        else:
-                            history_image_path = _snapshot_history_image(
-                                state, current_image_before_step
+                            LOGGER.info(
+                                "submit_ok | participant_id=%s | session_id=%s | task=rapm | answered=%s | done=%s",
+                                state.get("participant_id"),
+                                state.get("session_id"),
+                                state.get("rapm_answered"),
+                                state.get("done"),
                             )
-
-                        _append_move_history(
-                            state,
-                            answer_text=(ans or "").strip(),
-                            feedback_text=fb,
-                            image_path=history_image_path,
-                        )
-
-                        state["turn_logs"].append(
-                            {
-                                "step": len(state["turn_logs"]) + 1,
-                                "raw_answer": wrapped,
-                                "status": step.info.get("status"),
-                                "reward": step.reward,
-                                "info": step.info,
-                                "response_time_s": dt,
-                                "timestamp": datetime.utcnow().isoformat(),
-                            }
-                        )
-
-                        if step.done:
-                            state["done"] = True
-                            out_path = _persist_session(state)
-                            state["_current_observation"] = ""
-                            state["_current_image"] = image_path
-                            _cleanup_session_images(state)
+                            state["_current_observation"] = obs
+                            state["_current_image"] = img
+                            if state.get("done"):
+                                _cleanup_session_images(state)
+                                return (
+                                    state,
+                                    "",
+                                    img,
+                                    gr.update(value="", visible=False),
+                                    gr.update(value=met, visible=False),
+                                    "Completed",
+                                    _history_panel_update(state),
+                                    "",
+                                )
+                            state["prompt_shown_at"] = time.time()
                             return (
                                 state,
+                                obs,
+                                img,
+                                gr.update(value="", visible=False),
+                                gr.update(value=met, visible=False),
+                                stat,
+                                _history_panel_update(state),
                                 "",
+                            )
+                        else:
+                            env = state.get("env")
+                            if not env:
+                                return (
+                                    state,
+                                    "",
+                                    None,
+                                    gr.update(value="", visible=False),
+                                    gr.update(value={}, visible=False),
+                                    "Error",
+                                    _history_panel_update(state),
+                                    "",
+                                )
+
+                            wcst_pre_step_history_image = None
+                            if task_name == "wcst":
+                                wcst_pre_step_history_image = _snapshot_history_image(
+                                    state, current_image_before_step
+                                )
+
+                            try:
+                                step = env.step(wrapped)
+                            except Exception:
+                                LOGGER.exception(
+                                    "Submit failed in env.step | participant_id=%s | task=%s | setup=%s | answer=%r",
+                                    state.get("participant_id"),
+                                    task_name,
+                                    state.get("setup"),
+                                    ans,
+                                )
+                                return (
+                                    state,
+                                    state.get("_current_observation", ""),
+                                    state.get("_current_image"),
+                                    gr.update(value="", visible=False),
+                                    gr.update(value={}, visible=False),
+                                    "Error",
+                                    _history_panel_update(state),
+                                    "",
+                                )
+                            image_path = (
+                                env.get_current_image_path()
+                                if state.get("mode") == "image"
+                                else None
+                            )
+                            met = env.get_metrics()
+                            met = _format_metrics_for_task(task_name, met)
+                            obs_feedback = _clean_observation(step.observation)
+                            if obs_feedback:
+                                fb = obs_feedback
+                            else:
+                                status_txt = str(step.info.get("status") or "").strip()
+                                fb = status_txt or "Result recorded."
+
+                            # WCST history should reflect the pre-step card, while
+                            # SWM history should reflect the post-step board state.
+                            if task_name == "swm":
+                                history_image_path = _snapshot_history_image(state, image_path)
+                            elif task_name == "wcst":
+                                history_image_path = wcst_pre_step_history_image
+                            else:
+                                history_image_path = _snapshot_history_image(
+                                    state, current_image_before_step
+                                )
+
+                            _append_move_history(
+                                state,
+                                answer_text=(ans or "").strip(),
+                                feedback_text=fb,
+                                image_path=history_image_path,
+                            )
+
+                            state["turn_logs"].append(
+                                {
+                                    "step": len(state["turn_logs"]) + 1,
+                                    "raw_answer": wrapped,
+                                    "status": step.info.get("status"),
+                                    "reward": step.reward,
+                                    "info": step.info,
+                                    "response_time_s": dt,
+                                    "timestamp": datetime.utcnow().isoformat(),
+                                }
+                            )
+
+                            LOGGER.info(
+                                "submit_ok | participant_id=%s | session_id=%s | task=%s | step=%d | status=%s | reward=%s | done=%s | image_path=%s | history_len=%d",
+                                state.get("participant_id"),
+                                state.get("session_id"),
+                                task_name,
+                                len(state.get("turn_logs") or []),
+                                step.info.get("status"),
+                                step.reward,
+                                step.done,
+                                image_path,
+                                len(state.get("move_history") or []),
+                            )
+
+                            if step.done:
+                                state["done"] = True
+                                out_path = _persist_session(state)
+                                LOGGER.info(
+                                    "session_persisted | participant_id=%s | session_id=%s | path=%s",
+                                    state.get("participant_id"),
+                                    state.get("session_id"),
+                                    out_path,
+                                )
+                                state["_current_observation"] = ""
+                                state["_current_image"] = image_path
+                                _cleanup_session_images(state)
+                                return (
+                                    state,
+                                    "",
+                                    image_path,
+                                    gr.update(value="", visible=False),
+                                    gr.update(value=met, visible=False),
+                                    "Completed",
+                                    _history_panel_update(state),
+                                    "",
+                                )
+
+                            state["prompt_shown_at"] = time.time()
+                            next_obs = (
+                                ""
+                                if state.get("image_only")
+                                else _clean_observation(step.observation)
+                            )
+                            state["_current_observation"] = next_obs
+                            state["_current_image"] = image_path
+                            return (
+                                state,
+                                next_obs,
                                 image_path,
                                 gr.update(value="", visible=False),
                                 gr.update(value=met, visible=False),
-                                "Completed",
+                                "Running",
                                 _history_panel_update(state),
                                 "",
                             )
-
-                        state["prompt_shown_at"] = time.time()
-                        next_obs = (
-                            ""
-                            if state.get("image_only")
-                            else _clean_observation(step.observation)
+                    except Exception:
+                        LOGGER.exception(
+                            "Unhandled submit failure | participant_id=%s | session_id=%s | task=%s | setup=%s | answer=%r",
+                            (state or {}).get("participant_id"),
+                            (state or {}).get("session_id"),
+                            (state or {}).get("task"),
+                            (state or {}).get("setup"),
+                            ans,
                         )
-                        state["_current_observation"] = next_obs
-                        state["_current_image"] = image_path
+                        safe_state = state or {}
                         return (
-                            state,
-                            next_obs,
-                            image_path,
+                            safe_state,
+                            safe_state.get("_current_observation", ""),
+                            safe_state.get("_current_image"),
                             gr.update(value="", visible=False),
-                            gr.update(value=met, visible=False),
-                            "Running",
-                            _history_panel_update(state),
+                            gr.update(value={}, visible=False),
+                            "Error",
+                            _history_panel_update(safe_state),
                             "",
                         )
 
