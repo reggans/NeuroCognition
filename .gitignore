@@ -6,6 +6,12 @@ __pycache__/
 # C extensions
 *.so
 
+# VS Code
+.vscode/
+
+# Claude Code
+.claude/
+
 # Distribution / packaging
 .Python
 build/
@@ -177,6 +183,10 @@ wandb/
 outputs/
 logs/
 models/
+human_data/
+eval_data/
+.github/
+.gradio/
 
 data*/
 wcst_data*/
@@ -189,3 +199,6 @@ test_rapm_data.json
 sample_text_rapm.jsonl
 api_calc.ipynb
 *.sh
+
+# latex
+latex/

@@ -185,6 +185,15 @@ Examples:
         help="Batch completion window request (e.g. 24h).",
     )
 
+    human_parser = subparsers.add_parser(
+        "human", help="Launch browser-based human benchmark runner"
+    )
+    human_parser.add_argument("--host", type=str, default="127.0.0.1")
+    human_parser.add_argument("--port", type=int, default=7860)
+    human_parser.add_argument("--share", action="store_true")
+    human_parser.add_argument("--inbrowser", action="store_true")
+    human_parser.add_argument("--output_dir", type=str, default="human_data")
+
     args = parser.parse_args()
 
     if args.test == "wcst":
@@ -370,6 +379,10 @@ Examples:
             with open(reasoning_path, "w") as f:
                 json.dump(reasoning_traces, f, indent=2)
         print("RAPM evaluation complete!")
+    elif args.test == "human":
+        from human_benchmark import launch_human_benchmark  # type: ignore
+
+        launch_human_benchmark(args)
 
 
 if __name__ == "__main__":
