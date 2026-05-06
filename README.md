@@ -108,10 +108,18 @@ Outputs:
 
 ## RAPM — Raven’s Progressive Matrices
 
-Supports image JSON and text JSONL datasets. Example files:
+Supports image JSON and text JSONL datasets.
 
-- Image: `RAPM/test_rapm_data.json`
-- Text: `RAPM/sample_text_rapm.jsonl`
+**Data files are not included in this repository.** To obtain them:
+
+- **Image RAPM** (`RAPM/test_rapm_data.json`): The underlying images originate from the [RAVEN dataset](https://github.com/WellyZhang/RAVEN). We provide a processed version (question + answer choices combined into a single JSON) as supplementary material with the paper.
+- **Text RAPM** (`RAPM/sample_text_rapm.jsonl`): Can be generated locally using the code in `RAPM/text_rapm/`. See `RAPM/text_rapm.md` for constraint specifications, then run:
+
+  ```bash
+  python3 -m RAPM.text_rapm.cli --help
+  ```
+
+  A pre-generated version used in our experiments is also available as supplementary material with the paper.
 
 Quick starts:
 
@@ -206,16 +214,4 @@ Note: This is experimental and requires additional dependencies (`trl`, `deepspe
 
 ## Citation
 
-If you use this work, please cite the paper.
-
-```
-@misc{haznitrama2026neuropsychologicallygroundedevaluationllm,
-      title={A Neuropsychologically Grounded Evaluation of LLM Cognitive Abilities}, 
-      author={Faiz Ghifari Haznitrama and Faeyza Rishad Ardi and Alice Oh},
-      year={2026},
-      eprint={2603.02540},
-      archivePrefix={arXiv},
-      primaryClass={cs.AI},
-      url={https://arxiv.org/abs/2603.02540}, 
-}
-```
+If you use this work, please cite the paper (citation available after the review period).
