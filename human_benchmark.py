@@ -4,6 +4,7 @@
 import json
 import logging
 import os
+import random
 import re
 import secrets
 import shutil
@@ -20,7 +21,6 @@ from urllib.parse import parse_qs, quote
 
 from RAPM.rapm_evaluation import load_evaluation_data, load_text_rapm_jsonl
 from RAPM.rapm_utils import (
-    format_text_item_prompt,
     parse_image_answer,
     parse_text_mc,
     reconstruct_cell_constraint,
@@ -40,7 +40,7 @@ MOVE_HISTORY_RENDER_LIMIT = 60
 TASK_SETUP_CHOICES: Dict[str, List[str]] = {
     "wcst": ["text", "image+text"],
     "swm": ["text", "image+text", "image-only"],
-    "rapm": ["text", "image"],
+    "rapm": ["text", "text-gen", "image"],
 }
 
 # Tokenized preset configs for participant links (lives while app process runs).
@@ -209,11 +209,9 @@ class SessionSummary:
 
 
 def _resolve_mode(task: str, setup: str) -> Tuple[str, bool]:
-    if setup == "text":
+    if setup in ("text", "text-gen"):
         return "text", False
-    if setup == "image":
-        return "image", False
-    if setup == "image+text":
+    if setup in ("image", "image+text"):
         return "image", False
     if setup == "image-only":
         return "image", True
@@ -253,6 +251,41 @@ def _resolve_rapm_image(eval_data_path: str, question: Dict[str, Any]) -> Option
     return abs_path if os.path.exists(abs_path) else None
 
 
+def _format_human_rapm_text_prompt(item: Dict[str, Any], answer_mode: str) -> str:
+    grid = item["question_grid"]
+
+    # Build a flat 3x3 list of display strings
+    cells = [
+        [("?" if v is None else str(v)) for v in grid[r]]
+        for r in range(3)
+    ]
+
+    # Per-column max width for alignment
+    col_widths = [
+        max(len(cells[r][c]) for r in range(3))
+        for c in range(3)
+    ]
+
+    def render_row(r: int) -> str:
+        return " | ".join(cells[r][c].ljust(col_widths[c]) for c in range(3))
+
+    separator = "-+-".join("-" * w for w in col_widths)
+
+    grid_lines = []
+    for r in range(3):
+        grid_lines.append(render_row(r))
+        if r < 2:
+            grid_lines.append(separator)
+
+    grid_text = "\n".join(grid_lines)
+
+    if answer_mode == "mc":
+        options = item["options"]
+        opt_lines = [f"{i+1}. {o}" for i, o in enumerate(options)]
+        return "Matrix:\n" + grid_text + "\n\nOptions:\n" + "\n".join(opt_lines) + "\n\nEnter the option number (1–8)."
+    return "Matrix:\n" + grid_text + "\n\nThe bottom-right cell is missing. Enter the string that best completes the pattern."
+
+
 def _current_rapm_prompt(state: Dict[str, Any]) -> Tuple[str, Optional[str]]:
     idx = state["rapm_index"]
     total = state["rapm_total"]
@@ -263,7 +296,7 @@ def _current_rapm_prompt(state: Dict[str, Any]) -> Tuple[str, Optional[str]]:
         image_path = _resolve_rapm_image(state["rapm_eval_data"], q)
         return prompt, image_path
     item = state["rapm_items"][idx]
-    prompt = f"RAPM item {idx + 1}/{total}\n\n{format_text_item_prompt(item, state['rapm_answer_mode'])}"
+    prompt = f"RAPM item {idx + 1}/{total}\n\n{_format_human_rapm_text_prompt(item, state['rapm_answer_mode'])}"
     return prompt, None
 
 
@@ -637,7 +670,7 @@ def _start_session(
             "Error",
         )
 
-    state["rapm_answer_mode"] = "mc"
+    state["rapm_answer_mode"] = "gen" if setup == "text-gen" else "mc"
     state["rapm_index"] = 0
     state["rapm_answered"] = 0
     state["rapm_correct"] = 0
@@ -657,7 +690,7 @@ def _start_session(
         state["rapm_eval_data"] = RAPM_IMAGE_DATA_PATH
         questions = load_evaluation_data(RAPM_IMAGE_DATA_PATH)
         limit = min(n_questions, RAPM_MAX_IMAGE_QUESTIONS, len(questions))
-        state["rapm_questions"] = questions[:limit]
+        state["rapm_questions"] = random.sample(questions, limit)
         state["rapm_total"] = len(state["rapm_questions"])
     else:
         if not os.path.exists(RAPM_TEXT_DATA_PATH):
@@ -672,7 +705,7 @@ def _start_session(
         state["rapm_eval_data"] = RAPM_TEXT_DATA_PATH
         items = load_text_rapm_jsonl(RAPM_TEXT_DATA_PATH)
         limit = min(n_questions, RAPM_MAX_TEXT_QUESTIONS, len(items))
-        state["rapm_items"] = items[:limit]
+        state["rapm_items"] = random.sample(items, limit)
         state["rapm_total"] = len(state["rapm_items"])
 
     if state["rapm_total"] == 0:
@@ -875,14 +908,15 @@ Depending on the setup:
 """,
         "rapm": """**Raven's Advanced Progressive Matrices (RAPM)**
 
-You will be shown matrix puzzles. Each puzzle shows a pattern with one cell missing.
-Your task is to find the pattern and select the correct option that completes the matrix.
+You will be shown matrix puzzles. Each puzzle shows a 3×3 pattern with the bottom-right cell missing.
+Your task is to infer the rule(s) and complete the matrix.
 
 **How it works:**
-1. Analyze the matrix image to identify the pattern.
-2. Choose the option number (1-8) that best completes the pattern.
+1. Analyze the matrix to identify the pattern across rows and columns.
+2. Depending on the setup:
+   - **Text / Image**: Choose the option number (1–8) that best completes the matrix.
+   - **Text Gen**: Type the exact string that completes the missing cell.
 3. After you submit an answer, the test automatically moves to the next question.
-4. There are no correct answers provided; you must find the pattern yourself.
 """,
     }
     return instrs.get(task, "")
@@ -893,7 +927,14 @@ def launch_human_benchmark(args: Any) -> None:
 
     _configure_logging(getattr(args, "output_dir", "human_data"))
 
-    with gr.Blocks(title="NeuroCognition Human Benchmark") as demo:
+    css = (
+        "#obs-box textarea {"
+        "  font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro',"
+        "               Menlo, Consolas, 'Courier New', monospace !important;"
+        "  white-space: pre;"
+        "}"
+    )
+    with gr.Blocks(title="NeuroCognition Human Benchmark", css=css) as demo:
         gr.Markdown("# NeuroCognition Human Benchmark")
         session_state = gr.State(value={})
         output_dir_state = gr.State(value=getattr(args, "output_dir", "human_data"))
@@ -906,7 +947,7 @@ def launch_human_benchmark(args: Any) -> None:
                 with gr.Group():
                     participant_name = gr.Textbox(
                         label="Participant Name",
-                        placeholder="e.g., faiz",
+                        placeholder="e.g., participant",
                         value="participant",
                     )
 
@@ -1269,7 +1310,8 @@ def launch_human_benchmark(args: Any) -> None:
                 session_info = gr.Textbox(label="Session", interactive=False, value="")
 
                 observation = gr.Textbox(
-                    label="Prompt", lines=8, interactive=False, value=""
+                    label="Prompt", lines=8, interactive=False, value="",
+                    elem_id="obs-box",
                 )
                 stimulus_image = gr.Image(
                     label="Image", type="filepath", interactive=False
