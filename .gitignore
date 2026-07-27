@@ -184,6 +184,7 @@ outputs/
 logs/
 models/
 human_data/
+human_data_anon/
 eval_data/
 .github/
 .gradio/
@@ -202,3 +203,8 @@ api_calc.ipynb
 
 # latex
 latex/
+
+# analysis/export scripts (contain participant names or local paths)
+generate_paper_figures.py
+human_data_export.py
+anonymize_human_data.py
