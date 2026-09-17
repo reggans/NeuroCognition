@@ -498,9 +498,12 @@ class ModelWrapper:
                 )
             else:
                 # Extract reasoning trace from response
-                # Guard against None raw_response
+                # Some providers (e.g. GLM over OpenRouter) can return a null content
+                # field while still returning usable text elsewhere; treat as empty
+                # rather than aborting the whole call, so callers can still see/retry
+                # on an empty response instead of a hard failure.
                 if raw_response is None:
-                    return None
+                    raw_response = ""
                 trace = re.search(r"<think>(.*?)</think>", raw_response, re.DOTALL)
                 if not trace:
                     trace = re.search(
@@ -519,9 +522,9 @@ class ModelWrapper:
         # Parse response
         if truncate_history:
             # Remove reasoning trace and get content after </think> or </thinking>
-            # Guard against None raw_response
+            # Same null-content guard as above -- treat as empty, don't hard-fail.
             if raw_response is None:
-                return None
+                raw_response = ""
             parsed = re.search(r"</think>(.*?)$", raw_response, re.DOTALL)
             if not parsed:
                 parsed = re.search(r"</thinking>(.*?)$", raw_response, re.DOTALL)

@@ -24,6 +24,30 @@ except ImportError:
     from shared.model_wrapper import ModelWrapper
 from .image import draw_five_cards
 
+
+def _extract_answer_span(response, trailing_pattern=r"-?\d+"):
+    """Extract the model's final answer as an "<answer>...</answer>"-wrapped
+    string, or return None if nothing usable is found.
+
+    The original extraction used a single greedy regex search, which breaks
+    on two observed provider/model behaviors (most common with GLM models
+    over OpenRouter): (1) the response contains the answer stated in plain
+    text with no <answer> tag at all, and (2) the response duplicates itself
+    end-to-end, producing two <answer> tags, which made the greedy span
+    capture everything between the first and last tag instead of just the
+    answer. This keeps the same "<answer>...</answer>" return contract so
+    callers can keep using their existing `re.sub(r"<answer>|</answer>", ...)`
+    extraction unchanged.
+    """
+    matches = re.findall(r"<answer>(.*?)</answer>", response, re.DOTALL)
+    if matches:
+        return f"<answer>{matches[-1]}</answer>"
+    tail_match = re.search(r"(" + trailing_pattern + r")\s*\.?\s*$", response.rstrip())
+    if tail_match:
+        return f"<answer>{tail_match.group(1)}</answer>"
+    return None
+
+
 wcst_prompt = """You are performing the Wisconsin Card Sorting Test (WCST).
 You will be shown a given card with a symbol on it, and you will have to match it to one of four option cards according to an attribute that you have to figure out.
 The cards will be described by the following attributes:
@@ -486,12 +510,25 @@ def run_wcst(
                                     early_termination = True
                                     break
 
-                                ans = re.search(r"<answer>(?s:.*)</answer>", response)
-                                if ans:
-                                    ans = re.search(
-                                        r"<answer>(?s:.*)</answer>", response
-                                    )[0]
-                                    ans = re.sub(r"<answer>|</answer>", "", ans).strip()
+                                _answer_span = _extract_answer_span(response)
+                                if (
+                                    _answer_span is None
+                                    and cot
+                                    and model_instance.reasoning_trace
+                                ):
+                                    # Some providers (e.g. GLM over OpenRouter) occasionally
+                                    # return an empty content field while the full answer,
+                                    # tag included, ends up in the reasoning/thinking channel.
+                                    _answer_span = _extract_answer_span(
+                                        model_instance.reasoning_trace[-1].get(
+                                            "reasoning", ""
+                                        )
+                                        or ""
+                                    )
+                                if _answer_span is not None:
+                                    ans = re.sub(
+                                        r"<answer>|</answer>", "", _answer_span
+                                    ).strip()
                                     if ans == str(chosen_idx):
                                         correct_prefix = "Correct!\n"
                                         correct = True
@@ -507,6 +544,7 @@ def run_wcst(
                                         correct_bar.last_print_n = 0
                                         correct_bar.refresh()
                                 else:
+                                    ans = None
                                     correct_prefix = """Answer not found. Please state your final answer using the template: \"<answer>your answer</answer>\""""
                                     correct_cnt = 0
                                     correct_bar.n = 0
@@ -838,12 +876,25 @@ def run_wcst_image(
                                     early_termination = True
                                     break
 
-                                ans = re.search(r"<answer>(?s:.*)</answer>", response)
-                                if ans:
-                                    ans = re.search(
-                                        r"<answer>(?s:.*)</answer>", response
-                                    )[0]
-                                    ans = re.sub(r"<answer>|</answer>", "", ans).strip()
+                                _answer_span = _extract_answer_span(response)
+                                if (
+                                    _answer_span is None
+                                    and cot
+                                    and model_instance.reasoning_trace
+                                ):
+                                    # Some providers (e.g. GLM over OpenRouter) occasionally
+                                    # return an empty content field while the full answer,
+                                    # tag included, ends up in the reasoning/thinking channel.
+                                    _answer_span = _extract_answer_span(
+                                        model_instance.reasoning_trace[-1].get(
+                                            "reasoning", ""
+                                        )
+                                        or ""
+                                    )
+                                if _answer_span is not None:
+                                    ans = re.sub(
+                                        r"<answer>|</answer>", "", _answer_span
+                                    ).strip()
                                     if ans == str(correct_card_idx):
                                         correct_prefix = "Correct!\n"
                                         correct = True
@@ -859,6 +910,7 @@ def run_wcst_image(
                                         correct_bar.last_print_n = 0
                                         correct_bar.refresh()
                                 else:
+                                    ans = None
                                     correct_prefix = """Answer not found. Please state your final answer using the template: \"<answer>your answer</answer>\""""
                                     correct_cnt = 0
                                     correct_bar.n = 0

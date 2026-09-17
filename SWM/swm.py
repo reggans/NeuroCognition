@@ -18,6 +18,29 @@ except ImportError:
 from .image import SWMImage
 
 
+def _extract_answer_span(response, trailing_pattern=r"-?\d+"):
+    """Extract the model's final answer as an "<answer>...</answer>"-wrapped
+    string, or return None if nothing usable is found.
+
+    The original extraction used a single greedy regex search, which breaks
+    on two observed provider/model behaviors (most common with GLM models
+    over OpenRouter): (1) the response contains the answer stated in plain
+    text with no <answer> tag at all, and (2) the response duplicates itself
+    end-to-end, producing two <answer> tags, which made the greedy span
+    capture everything between the first and last tag instead of just the
+    answer. This keeps the same "<answer>...</answer>" return contract so
+    callers can keep using their existing `re.sub(r"<answer>|</answer>", ...)`
+    extraction unchanged.
+    """
+    matches = re.findall(r"<answer>(.*?)</answer>", response, re.DOTALL)
+    if matches:
+        return f"<answer>{matches[-1]}</answer>"
+    tail_match = re.search(r"(" + trailing_pattern + r")\s*\.?\s*$", response.rstrip())
+    if tail_match:
+        return f"<answer>{tail_match.group(1)}</answer>"
+    return None
+
+
 def image_swm(
     model,
     n_boxes,
@@ -137,12 +160,21 @@ Your final answer should be a coordinate (x, y), the grid coordinate of the box 
                         msg += f"{token} tokens found: {n_boxes - len(legal_boxes[token])}\n"
 
                     # Get and validate response
-                    if re.search(r"<answer>(?s:.*)</answer>", response) is not None:
-                        chosen_coord = re.search(r"<answer>(?s:.*)</answer>", response)[
-                            0
-                        ]
+                    _coord_pattern = r"\(?\s*-?\d+\s*,\s*-?\d+\s*\)?"
+                    _answer_span = _extract_answer_span(
+                        response, trailing_pattern=_coord_pattern
+                    )
+                    if _answer_span is None and cot and model.reasoning_trace:
+                        # Some providers (e.g. GLM over OpenRouter) occasionally return
+                        # an empty content field while the full answer, tag included,
+                        # ends up in the separate reasoning/thinking channel instead.
+                        _answer_span = _extract_answer_span(
+                            model.reasoning_trace[-1].get("reasoning", "") or "",
+                            trailing_pattern=_coord_pattern,
+                        )
+                    if _answer_span is not None:
                         chosen_coord = re.sub(
-                            r"<answer>|</answer>", "", chosen_coord
+                            r"<answer>|</answer>", "", _answer_span
                         ).strip()
                         try:
                             chosen_coord = re.findall(r"[0-9]+", chosen_coord)
@@ -423,10 +455,17 @@ Your final answer should be a number from 1-{n_boxes}, the index of the box you 
                         msg += f"{token} tokens found: {n_boxes - len(legal_boxes[token])}\n"
 
                     # Get and validate response
-                    if re.search(r"<answer>(?s:.*)</answer>", response) is not None:
-                        chosen_box = re.search(r"<answer>(?s:.*)</answer>", response)[0]
+                    _answer_span = _extract_answer_span(response)
+                    if _answer_span is None and cot and model.reasoning_trace:
+                        # Some providers (e.g. GLM over OpenRouter) occasionally return
+                        # an empty content field while the full answer, tag included,
+                        # ends up in the separate reasoning/thinking channel instead.
+                        _answer_span = _extract_answer_span(
+                            model.reasoning_trace[-1].get("reasoning", "") or ""
+                        )
+                    if _answer_span is not None:
                         chosen_box = re.sub(
-                            r"<answer>|</answer>", "", chosen_box
+                            r"<answer>|</answer>", "", _answer_span
                         ).strip()
                         try:
                             chosen_box = int(chosen_box)
