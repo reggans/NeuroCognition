@@ -1,6 +1,6 @@
 import openai
 
-import os, time, re
+import os, time, re, uuid
 import logging
 import base64
 
@@ -107,6 +107,8 @@ for _logger in ("openai", "openai._client", "urllib3", "httpx"):
     except Exception:
         pass
 
+logger = logging.getLogger(__name__)
+
 
 class ModelWrapper:
     def __init__(
@@ -119,6 +121,7 @@ class ModelWrapper:
         image_input=False,
         image_path=None,
         n_retry: int = -1,
+        prompt_cache: bool = True,
     ):
         if image_input:
             if image_path is None:
@@ -136,6 +139,17 @@ class ModelWrapper:
         self.image_input = image_input
         self.image_path = image_path
         self.reasoning_trace = []  # Add new private attribute
+        # Off: skip cache hints (provider-side automatic caching still applies)
+        self.prompt_cache = prompt_cache
+        self.cache_key = None
+        self.last_usage = None
+        self.usage_log = []  # One entry per API call
+        self.usage_totals = {
+            "prompt_tokens": 0,
+            "cached_tokens": 0,
+            "completion_tokens": 0,
+            "cost": 0.0,
+        }
         # Max number of retry attempts for a failed API call (total attempts = n_retry + 1)
         self.n_retry = max(0, n_retry)
 
@@ -202,6 +216,49 @@ class ModelWrapper:
             {"role": "system", "content": task_prompt},
         ]
         self.reasoning_trace = []  # Reset reasoning trace when starting new chat
+        # Groups one episode's requests onto the same OpenAI prompt cache
+        self.cache_key = uuid.uuid4().hex
+
+    def _uses_cache_control(self):
+        # Anthropic models on OpenRouter only cache at explicit cache_control breakpoints
+        return self.prompt_cache and self.model_source == "openrouter" and (
+            self.model_name or ""
+        ).lower().startswith("anthropic/")
+
+    def _request_messages(self):
+        """History to send; adds a cache breakpoint on the last message without mutating history."""
+        if not self._uses_cache_control() or not self.history:
+            return self.history
+        last = dict(self.history[-1])
+        content = last["content"]
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
+        content = list(content)
+        content[-1] = {**content[-1], "cache_control": {"type": "ephemeral"}}
+        last["content"] = content
+        return self.history[:-1] + [last]
+
+    def _record_usage(self, usage):
+        if usage is None:
+            return
+        details = getattr(usage, "prompt_tokens_details", None)
+        self.last_usage = {
+            "prompt_tokens": getattr(usage, "prompt_tokens", None) or 0,
+            "cached_tokens": getattr(details, "cached_tokens", None) or 0,
+            "completion_tokens": getattr(usage, "completion_tokens", None) or 0,
+            # Billed USD, reported by OpenRouter only
+            "cost": float(getattr(usage, "cost", None) or 0.0),
+        }
+        self.usage_log.append(self.last_usage)
+        for k, v in self.last_usage.items():
+            self.usage_totals[k] += v
+        logger.info(
+            "usage: prompt=%d cached=%d completion=%d cost=%.6f",
+            self.last_usage["prompt_tokens"],
+            self.last_usage["cached_tokens"],
+            self.last_usage["completion_tokens"],
+            self.last_usage["cost"],
+        )
 
     def send_message(
         self,
@@ -249,7 +306,10 @@ class ModelWrapper:
             self.history.append({"role": "user", "content": message})
 
         extra_body = {}
-        if self.model_source == "vllm":
+        if self.model_source == "openai":
+            if self.prompt_cache and self.cache_key:
+                extra_body = {"prompt_cache_key": self.cache_key}
+        elif self.model_source == "vllm":
             extra_body = {
                 "chat_template_kwargs": {"enable_thinking": bool(cot)},
             }
@@ -330,6 +390,7 @@ class ModelWrapper:
         # Metadata placeholders
         self.last_finish_reason = None
         self.last_truncated = False
+        self.last_usage = None
 
         # Unified retry logic with optional streaming
         attempts = self.n_retry + 1  # total attempts including first try
@@ -340,12 +401,17 @@ class ModelWrapper:
                     if stream:
                         stream_resp = self.client.chat.completions.create(
                             model=self.model_name,
-                            messages=self.history,
+                            messages=self._request_messages(),
                             max_completion_tokens=max_new_tokens or self.max_new_tokens,
                             extra_body=extra_body,
                             stream=True,
+                            stream_options={"include_usage": True},
                         )
                         for chunk in stream_resp:  # type: ignore
+                            # Final usage chunk has no choices
+                            if not chunk.choices:
+                                self._record_usage(getattr(chunk, "usage", None))
+                                continue
                             try:
                                 delta = chunk.choices[0].delta
                                 if hasattr(delta, "content") and delta.content:
@@ -360,10 +426,11 @@ class ModelWrapper:
                     else:
                         raw_resp = self.client.chat.completions.create(
                             model=self.model_name,
-                            messages=self.history,
+                            messages=self._request_messages(),
                             max_completion_tokens=max_new_tokens or self.max_new_tokens,
                             extra_body=extra_body,
                         )
+                        self._record_usage(getattr(raw_resp, "usage", None))
                         raw_response = raw_resp.choices[0].message.content
                         self.last_finish_reason = getattr(
                             raw_resp.choices[0], "finish_reason", None
@@ -375,13 +442,18 @@ class ModelWrapper:
                     if stream:
                         stream_resp = self.client.chat.completions.create(
                             model=self.model_name,
-                            messages=self.history,
+                            messages=self._request_messages(),
                             max_tokens=max_new_tokens or self.max_new_tokens,
                             temperature=0.0,
                             extra_body=extra_body,
                             stream=True,
+                            stream_options={"include_usage": True},
                         )
                         for chunk in stream_resp:  # type: ignore
+                            # Final usage chunk has no choices
+                            if not chunk.choices:
+                                self._record_usage(getattr(chunk, "usage", None))
+                                continue
                             try:
                                 # Prefer OpenAI-compatible delta structure
                                 delta = getattr(chunk.choices[0], "delta", None)
@@ -405,12 +477,13 @@ class ModelWrapper:
                     else:
                         raw_resp = self.client.chat.completions.create(
                             model=self.model_name,
-                            messages=self.history,
+                            messages=self._request_messages(),
                             max_tokens=max_new_tokens or self.max_new_tokens,
                             temperature=0.0,
                             # top_p=0.95,
                             extra_body=extra_body,
                         )
+                        self._record_usage(getattr(raw_resp, "usage", None))
                         fr = getattr(raw_resp.choices[0], "finish_reason", None)
                         self.last_finish_reason = fr
                         if fr == "error":
@@ -468,7 +541,7 @@ class ModelWrapper:
             try:
                 cont_resp = self.client.chat.completions.create(
                     model=self.model_name,
-                    messages=self.history,
+                    messages=self._request_messages(),
                     **(
                         {"max_completion_tokens": max_new_tokens or self.max_new_tokens}
                         if self.model_source == "openai"
@@ -478,6 +551,7 @@ class ModelWrapper:
                         }
                     ),
                 )
+                self._record_usage(getattr(cont_resp, "usage", None))
                 cont_text = cont_resp.choices[0].message.content
                 fr = getattr(cont_resp.choices[0], "finish_reason", None)
                 self.last_finish_reason = fr
