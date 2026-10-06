@@ -72,6 +72,11 @@ Examples:
     wcst_parser.add_argument("--think_budget", type=int, default=64)
     wcst_parser.add_argument("--api_key", type=str, default=None)
     wcst_parser.add_argument("--verbose", type=int, default=15)
+    wcst_parser.add_argument(
+        "--no-prompt-cache",
+        action="store_true",
+        help="Disable provider cache hints (for cost comparison)",
+    )
 
     swm_parser = subparsers.add_parser("swm", help="Run Spatial Working Memory test")
     swm_parser.add_argument("--model", type=str, default=None)
@@ -91,6 +96,11 @@ Examples:
     swm_parser.add_argument("--image", action="store_true")
     swm_parser.add_argument("--api_key", type=str, default=None)
     swm_parser.add_argument("--image-only", action="store_true")
+    swm_parser.add_argument(
+        "--no-prompt-cache",
+        action="store_true",
+        help="Disable provider cache hints (for cost comparison)",
+    )
 
     # RAPM parser
     rapm_parser = subparsers.add_parser(
@@ -217,6 +227,7 @@ Examples:
                 think_budget=args.think_budget,
                 api_key=args.api_key,
                 verbose=args.verbose,
+                prompt_cache=not args.no_prompt_cache,
             )
         else:
             from WCST.wcst import run_wcst  # type: ignore
@@ -239,6 +250,7 @@ Examples:
                 think_budget=args.think_budget,
                 api_key=args.api_key,
                 verbose=args.verbose,
+                prompt_cache=not args.no_prompt_cache,
             )
     elif args.test == "swm":
         # Delegate to SWM package runner which handles runs and saving results
@@ -257,6 +269,7 @@ Examples:
             image=args.image,
             api_key=args.api_key,
             image_only=args.image_only,
+            prompt_cache=not args.no_prompt_cache,
         )
     elif args.test == "rapm":
         # Validate RAPM availability

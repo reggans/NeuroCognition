@@ -31,6 +31,7 @@ def swm_main(
     notes=False,
     image=False,
     api_key=None,
+    prompt_cache=True,
 ):
     """
     Run the Spatial Working Memory (SWM) test.
@@ -47,6 +48,7 @@ def swm_main(
         notes: Whether to use note-taking assistance
         image: Whether to use image mode
         api_key: API key to use
+        prompt_cache: Send provider cache hints; False appends _nocache to output files
     """
     # Input validation
     if model_source not in ["openai", "openrouter", "vllm", "google"]:
@@ -96,7 +98,7 @@ def swm_main(
     else:
         data_subdir = "text"
 
-    file_header = f"SWM/data/{data_subdir}/{'baselines/' if notes else ''}{model_source}_{model.replace('/', '-')}{'_cot' if cot else ''}_{n_boxes}_{n_tokens}_"
+    file_header = f"SWM/data/{data_subdir}/{'baselines/' if notes else ''}{model_source}_{model.replace('/', '-')}{'_cot' if cot else ''}{'' if prompt_cache else '_nocache'}_{n_boxes}_{n_tokens}_"
     print(f"Saving to: {file_header}")
 
     # Check if results already exist
@@ -104,11 +106,20 @@ def swm_main(
     history_file = file_header + "run_history.json"
     structured_history_file = file_header + "run_structured_history.json"
     reasoning_file = file_header + "run_reasoning.json"
+    usage_file = file_header + "run_usage.json"
 
     run_stats = {}
     run_history = {}
     structured_history = {}
     run_reasoning = {}
+    run_usage = {}
+
+    if os.path.exists(usage_file):
+        try:
+            with open(usage_file, "r") as f:
+                run_usage = json.load(f)
+        except Exception as e:
+            print(f"Error loading usage file: {e}")
 
     if os.path.exists(stats_file):
         try:
@@ -181,6 +192,7 @@ def swm_main(
             max_new_tokens=max_tokens,
             image_input=image,
             image_path=img_path,
+            prompt_cache=prompt_cache,
         )
 
         print(f"Run {i+1}/{runs}")
@@ -227,6 +239,13 @@ def swm_main(
             file_header + "run_reasoning.json", "w"
         ) as f:  # Save reasoning traces
             json.dump(run_reasoning, f, indent=4)
+
+        run_usage[f"run_{i+1}"] = {
+            "totals": model_instance.usage_totals,
+            "calls": model_instance.usage_log,
+        }
+        with open(usage_file, "w") as f:
+            json.dump(run_usage, f, indent=4)
 
     avg_stats = {}
     for key in run_stats["run_1"].keys():

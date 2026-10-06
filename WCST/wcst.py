@@ -295,6 +295,7 @@ def run_wcst(
     think_budget=64,
     api_key=None,
     verbose=15,
+    prompt_cache=True,
 ):
     """
     Run the Wisconsin Card Sorting Test (WCST).
@@ -316,6 +317,7 @@ def run_wcst(
         think_budget: Budget tokens for reasoning
         api_key: API key to use
         verbose: Verbosity level
+        prompt_cache: Send provider cache hints; False appends _nocache to output files
     """
     print(f"few_shot: {few_shot}")
 
@@ -336,6 +338,9 @@ def run_wcst(
 
     elif cot:
         save_path = save_path.replace(".json", "_cot.json")
+
+    if not prompt_cache:
+        save_path = save_path.replace(".json", "_nocache.json")
 
     print(f"Saving to: {save_path}")
 
@@ -406,6 +411,7 @@ def run_wcst(
     save = {}
     run_history = {}
     run_reasoning = {}
+    run_usage = {}
 
     for rep in range(repeats):
         model_instance = None
@@ -415,7 +421,11 @@ def run_wcst(
         turn_counter = 0
 
         model_instance = ModelWrapper(
-            model, model_source, api_key=api_key, max_new_tokens=max_tokens
+            model,
+            model_source,
+            api_key=api_key,
+            max_new_tokens=max_tokens,
+            prompt_cache=prompt_cache,
         )
         model_instance.init_chat(system_prompt)
 
@@ -655,6 +665,13 @@ def run_wcst(
         with open(save_path.replace(".json", "_reasoning.json"), "w") as f:
             json.dump(run_reasoning, f, indent=4)
 
+        run_usage[f"run_{rep+1}"] = {
+            "totals": model_instance.usage_totals,
+            "calls": model_instance.usage_log,
+        }
+        with open(save_path.replace(".json", "_usage.json"), "w") as f:
+            json.dump(run_usage, f, indent=4)
+
 
 def run_wcst_image(
     model="llama",
@@ -673,6 +690,7 @@ def run_wcst_image(
     think_budget=64,
     api_key=None,
     verbose=15,
+    prompt_cache=True,
 ):
     """
     Run the Wisconsin Card Sorting Test (WCST) with visual card images.
@@ -692,6 +710,7 @@ def run_wcst_image(
         think_budget: Budget tokens for reasoning
         api_key: API key to use
         verbose: Verbosity level
+        prompt_cache: Send provider cache hints; False appends _nocache to output files
     """
     print(f"Running image WCST with model: {model}")
     print(f"few_shot: {few_shot}")
@@ -713,6 +732,9 @@ def run_wcst_image(
         save_path = save_path.replace(".json", "_few_shot.json")
     elif cot:
         save_path = save_path.replace(".json", "_cot.json")
+
+    if not prompt_cache:
+        save_path = save_path.replace(".json", "_nocache.json")
 
     print(f"Saving to: {save_path}")
 
@@ -770,6 +792,7 @@ def run_wcst_image(
     save = {}
     run_history = {}
     run_reasoning = {}
+    run_usage = {}
 
     for rep in range(repeats):
         model_instance = None
@@ -786,6 +809,7 @@ def run_wcst_image(
             max_new_tokens=max_tokens,
             image_input=True,
             image_path="WCST/images/",
+            prompt_cache=prompt_cache,
         )
         model_instance.init_chat(system_prompt)
 
@@ -1009,6 +1033,13 @@ def run_wcst_image(
 
         with open(save_path.replace(".json", "_reasoning.json"), "w") as f:
             json.dump(run_reasoning, f, indent=4)
+
+        run_usage[f"run_{rep+1}"] = {
+            "totals": model_instance.usage_totals,
+            "calls": model_instance.usage_log,
+        }
+        with open(save_path.replace(".json", "_usage.json"), "w") as f:
+            json.dump(run_usage, f, indent=4)
 
 
 def parse_card_attributes(card_description, bg_color=False):
