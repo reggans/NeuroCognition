@@ -107,8 +107,14 @@ def _text_len(content: Any) -> int:
     return 0
 
 
-def context_chars(messages: Sequence[dict]) -> list[int]:
-    """Cumulative text chars in context at each API call (images not counted)."""
+def context_chars(messages: Sequence[dict], stateless: bool = False) -> list[int]:
+    """Text chars in context at each API call (images not counted).
+
+    Stateless runs only send the system prompt and the current user turn.
+    """
+    if stateless:
+        system = _text_len(messages[0]["content"])
+        return [system + _text_len(m["content"]) for m in messages if m["role"] == "user"]
     out, total = [], 0
     for message in messages:
         total += _text_len(message["content"])
@@ -221,7 +227,8 @@ def _depth_columns(
         print(f"  warn: {path_usage.name} [{run}] has {len(calls)} calls for {n} turns; prompt_tokens dropped")
 
     messages = _optional_run_field(path_history, run)
-    chars = align(context_chars(messages) if messages else None, n, allow_trailing)
+    stateless = "_stateless" in path_history.stem
+    chars = align(context_chars(messages, stateless) if messages else None, n, allow_trailing)
     if messages and chars is None:
         print(f"  warn: {path_history.name} [{run}] doesn't align with {n} turns; context_chars dropped")
 

@@ -32,6 +32,7 @@ def swm_main(
     image=False,
     api_key=None,
     prompt_cache=True,
+    stateless=False,
 ):
     """
     Run the Spatial Working Memory (SWM) test.
@@ -49,6 +50,7 @@ def swm_main(
         image: Whether to use image mode
         api_key: API key to use
         prompt_cache: Send provider cache hints; False appends _nocache to output files
+        stateless: Drop previous turns from every request; appends _stateless to output files
     """
     # Input validation
     if model_source not in ["openai", "openrouter", "vllm", "google"]:
@@ -98,7 +100,7 @@ def swm_main(
     else:
         data_subdir = "text"
 
-    file_header = f"SWM/data/{data_subdir}/{'baselines/' if notes else ''}{model_source}_{model.replace('/', '-')}{'_cot' if cot else ''}{'' if prompt_cache else '_nocache'}_{n_boxes}_{n_tokens}_"
+    file_header = f"SWM/data/{data_subdir}/{'baselines/' if notes else ''}{model_source}_{model.replace('/', '-')}{'_cot' if cot else ''}{'' if prompt_cache else '_nocache'}{'_stateless' if stateless else ''}_{n_boxes}_{n_tokens}_"
     print(f"Saving to: {file_header}")
 
     # Check if results already exist
@@ -193,6 +195,7 @@ def swm_main(
             image_input=image,
             image_path=img_path,
             prompt_cache=prompt_cache,
+            stateless=stateless,
         )
 
         print(f"Run {i+1}/{runs}")
@@ -219,7 +222,7 @@ def swm_main(
         except Exception as e:
             print(f"Run {i+1} failed with error: {e}")
             continue
-        run_history[f"run_{i+1}"] = model_instance.history
+        run_history[f"run_{i+1}"] = model_instance.full_history
         run_reasoning[f"run_{i+1}"] = (
             model_instance.reasoning_trace
         )  # Save reasoning trace

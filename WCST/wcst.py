@@ -296,6 +296,7 @@ def run_wcst(
     api_key=None,
     verbose=15,
     prompt_cache=True,
+    stateless=False,
 ):
     """
     Run the Wisconsin Card Sorting Test (WCST).
@@ -318,6 +319,7 @@ def run_wcst(
         api_key: API key to use
         verbose: Verbosity level
         prompt_cache: Send provider cache hints; False appends _nocache to output files
+        stateless: Drop previous turns from every request; appends _stateless to output files
     """
     print(f"few_shot: {few_shot}")
 
@@ -341,6 +343,9 @@ def run_wcst(
 
     if not prompt_cache:
         save_path = save_path.replace(".json", "_nocache.json")
+
+    if stateless:
+        save_path = save_path.replace(".json", "_stateless.json")
 
     print(f"Saving to: {save_path}")
 
@@ -426,6 +431,7 @@ def run_wcst(
             api_key=api_key,
             max_new_tokens=max_tokens,
             prompt_cache=prompt_cache,
+            stateless=stateless,
         )
         model_instance.init_chat(system_prompt)
 
@@ -653,7 +659,7 @@ def run_wcst(
         print(f"Total accuracy: {total_correct/n_trials}")
 
         save[f"run_{rep+1}"] = save_rep
-        run_history[f"run_{rep+1}"] = model_instance.history
+        run_history[f"run_{rep+1}"] = model_instance.full_history
         run_reasoning[f"run_{rep+1}"] = model_instance.reasoning_trace
 
         with open(save_path, "w") as f:
@@ -691,6 +697,7 @@ def run_wcst_image(
     api_key=None,
     verbose=15,
     prompt_cache=True,
+    stateless=False,
 ):
     """
     Run the Wisconsin Card Sorting Test (WCST) with visual card images.
@@ -711,6 +718,7 @@ def run_wcst_image(
         api_key: API key to use
         verbose: Verbosity level
         prompt_cache: Send provider cache hints; False appends _nocache to output files
+        stateless: Drop previous turns from every request; appends _stateless to output files
     """
     print(f"Running image WCST with model: {model}")
     print(f"few_shot: {few_shot}")
@@ -735,6 +743,9 @@ def run_wcst_image(
 
     if not prompt_cache:
         save_path = save_path.replace(".json", "_nocache.json")
+
+    if stateless:
+        save_path = save_path.replace(".json", "_stateless.json")
 
     print(f"Saving to: {save_path}")
 
@@ -810,6 +821,7 @@ def run_wcst_image(
             image_input=True,
             image_path="WCST/images/",
             prompt_cache=prompt_cache,
+            stateless=stateless,
         )
         model_instance.init_chat(system_prompt)
 
@@ -1022,7 +1034,7 @@ def run_wcst_image(
         print(f"Total accuracy: {total_correct/n_trials}")
 
         save[f"run_{rep+1}"] = save_rep
-        run_history[f"run_{rep+1}"] = model_instance.history
+        run_history[f"run_{rep+1}"] = model_instance.full_history
         run_reasoning[f"run_{rep+1}"] = model_instance.reasoning_trace
 
         with open(save_path, "w") as f:

@@ -66,6 +66,7 @@ Arguments:
 - `--hint` include rule hint
 - `--notes` enable note-taking assistance
 - `--notes-window` int (6) — note-taking window size
+- `--history` `full|none` (default `full`) — `none` drops previous turns from every request; with `--notes` it is the oracle-memory arm
 - `--image` image-based WCST
 - `--bg-color` enable background color rule
 - `--model_source` `vllm|openai|openrouter|google` (default `vllm`)
@@ -95,6 +96,7 @@ Arguments:
 - `--runs` int (1) — repeat full run, report average score
 - `--max_tokens` (512), `--think_budget` (64)
 - `--notes` note-taking assistance
+- `--history` `full|none` (default `full`) — `none` drops previous turns from every request; with `--notes` it is the oracle-memory arm
 - `--image` image mode
 - `--image-only` enable image-only mode (requires `--image`)
 - `--api_key`

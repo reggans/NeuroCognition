@@ -77,6 +77,12 @@ Examples:
         action="store_true",
         help="Disable provider cache hints (for cost comparison)",
     )
+    wcst_parser.add_argument(
+        "--history",
+        choices=["full", "none"],
+        default="full",
+        help="none: drop previous turns from every request (with --notes: oracle-memory arm)",
+    )
 
     swm_parser = subparsers.add_parser("swm", help="Run Spatial Working Memory test")
     swm_parser.add_argument("--model", type=str, default=None)
@@ -100,6 +106,12 @@ Examples:
         "--no-prompt-cache",
         action="store_true",
         help="Disable provider cache hints (for cost comparison)",
+    )
+    swm_parser.add_argument(
+        "--history",
+        choices=["full", "none"],
+        default="full",
+        help="none: drop previous turns from every request (with --notes: oracle-memory arm)",
     )
 
     # RAPM parser
@@ -228,6 +240,7 @@ Examples:
                 api_key=args.api_key,
                 verbose=args.verbose,
                 prompt_cache=not args.no_prompt_cache,
+                stateless=args.history == "none",
             )
         else:
             from WCST.wcst import run_wcst  # type: ignore
@@ -251,6 +264,7 @@ Examples:
                 api_key=args.api_key,
                 verbose=args.verbose,
                 prompt_cache=not args.no_prompt_cache,
+                stateless=args.history == "none",
             )
     elif args.test == "swm":
         # Delegate to SWM package runner which handles runs and saving results
@@ -270,6 +284,7 @@ Examples:
             api_key=args.api_key,
             image_only=args.image_only,
             prompt_cache=not args.no_prompt_cache,
+            stateless=args.history == "none",
         )
     elif args.test == "rapm":
         # Validate RAPM availability

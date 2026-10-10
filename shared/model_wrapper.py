@@ -109,6 +109,11 @@ for _logger in ("openai", "openai._client", "urllib3", "httpx"):
 
 logger = logging.getLogger(__name__)
 
+STATELESS_NOTICE = (
+    "\nYou will not see previous turns. Each message contains only the current "
+    "turn's information, including any notes provided.\n"
+)
+
 
 class ModelWrapper:
     def __init__(
@@ -122,6 +127,7 @@ class ModelWrapper:
         image_path=None,
         n_retry: int = -1,
         prompt_cache: bool = True,
+        stateless: bool = False,
     ):
         if image_input:
             if image_path is None:
@@ -142,6 +148,9 @@ class ModelWrapper:
         # Off: skip cache hints (provider-side automatic caching still applies)
         self.prompt_cache = prompt_cache
         self.cache_key = None
+        # Stateless: each request carries only the system prompt and the current turn
+        self.stateless = stateless
+        self.dropped_history = []
         self.last_usage = None
         self.usage_log = []  # One entry per API call
         self.usage_totals = {
@@ -212,12 +221,20 @@ class ModelWrapper:
         self,
         task_prompt,
     ):
+        if self.stateless:
+            task_prompt += STATELESS_NOTICE
         self.history = [
             {"role": "system", "content": task_prompt},
         ]
+        self.dropped_history = []
         self.reasoning_trace = []  # Reset reasoning trace when starting new chat
         # Groups one episode's requests onto the same OpenAI prompt cache
         self.cache_key = uuid.uuid4().hex
+
+    @property
+    def full_history(self):
+        """Complete transcript, including turns dropped in stateless mode."""
+        return self.history[:1] + self.dropped_history + self.history[1:]
 
     def _uses_cache_control(self):
         # Anthropic models on OpenRouter only cache at explicit cache_control breakpoints
@@ -272,6 +289,10 @@ class ModelWrapper:
         continue_on_truncation: bool = False,
         max_continuations: int = 0,
     ):
+        if self.stateless and len(self.history) > 1:
+            self.dropped_history.extend(self.history[1:])
+            self.history = self.history[:1]
+
         if not validate_message_turns(self.history):
             raise ValueError(
                 "Invalid message turn sequence detected. Check error.json for details."

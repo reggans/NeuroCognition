@@ -159,6 +159,7 @@ def test_align_and_context_chars():
         {"role": "user", "content": [{"type": "text", "text": "gh"}, {"type": "image_url"}]},
     ]
     assert context_chars(messages) == [5, 8]
+    assert context_chars(messages, stateless=True) == [5, 5]
 
 
 def test_summarize_first_failure():
