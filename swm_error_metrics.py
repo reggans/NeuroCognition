@@ -184,7 +184,8 @@ def aggregate_error_metrics():
         for stats_file in data_dir.rglob("*run_stats.json"):
             if "old" in str(stats_file):
                 continue
-            if "_notes" in stats_file.stem:
+            # Full-history, unassisted runs only
+            if "_notes" in stats_file.stem or "_stateless" in stats_file.stem:
                 continue
 
             model_name = stats_file.parent.name

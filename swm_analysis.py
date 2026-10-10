@@ -6,7 +6,16 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 
-CATEGORY_ORDER = ["non_cot", "non_cot-notes", "cot", "cot-notes"]
+CATEGORY_ORDER = [
+    "non_cot",
+    "non_cot-notes",
+    "cot",
+    "cot-notes",
+    "non_cot-stateless",
+    "non_cot-notes-stateless",
+    "cot-stateless",
+    "cot-notes-stateless",
+]
 OUTPUT_ROOT = Path("./SWM/data")
 
 
@@ -162,6 +171,16 @@ def parse_setup(filename):
     return None, None
 
 
+def setup_category(stem, is_cot):
+    """Condition category, e.g. 'cot-notes-stateless'."""
+    category = "cot" if is_cot else "non_cot"
+    if "_notes" in stem:
+        category += "-notes"
+    if "_stateless" in stem:
+        category += "-stateless"
+    return category
+
+
 def total_tokens_required(setup):
     """Calculate the total number of tokens that need to be found for a setup"""
     if not setup:
@@ -207,9 +226,7 @@ def analyze_results():
             if not total_needed_tokens:
                 continue
 
-            is_notes = "_notes" in stats_file.stem
-            base_category = "cot" if is_cot else "non_cot"
-            category = f"{base_category}-notes" if is_notes else base_category
+            category = setup_category(stats_file.stem, is_cot)
 
             if category not in results[source]:
                 results[source][category] = {}

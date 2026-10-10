@@ -282,17 +282,21 @@ def _compute_model_stats(results_dict):
                     del results_dict[setup_type][category][model_name]
 
 
+# Condition suffixes, in the order they are appended to a category
+CATEGORY_SUFFIXES = ("_notes", "_stateless")
+
+
 def _normalize_category_for_hard_easy(category_name):
-    is_notes = category_name.endswith("_notes")
-    base = category_name[:-6] if is_notes else category_name
+    base, suffixes = category_name, ""
+    for suffix in reversed(CATEGORY_SUFFIXES):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            suffixes = suffix + suffixes
     has_background = "_bg" in base
     if "_bg" in base:
         base = base.split("_bg")[0]
     difficulty = "hard" if has_background else "easy"
-    normalized = f"{base}_{difficulty}"
-    if is_notes:
-        normalized += "_notes"
-    return normalized
+    return f"{base}_{difficulty}{suffixes}"
 
 
 def _build_hard_easy_results(raw_results):
@@ -430,6 +434,8 @@ def analyze_results(data_type: str = "image"):
 
             if has_notes:
                 category = f"{category}_notes"
+            if "_stateless" in stem:
+                category = f"{category}_stateless"
 
             # Dynamically add new category containers if needed
             if category not in results[setup_type]:
